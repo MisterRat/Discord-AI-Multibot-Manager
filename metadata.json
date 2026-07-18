@@ -1,0 +1,8 @@
+{
+  "name": "Discord AI Multi-bot Manager",
+  "description": "Admin panel to configure and manage a self-hosted Discord AI Bot connected to any OpenAI-compatible server.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

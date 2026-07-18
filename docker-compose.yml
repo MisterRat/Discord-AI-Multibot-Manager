@@ -1,0 +1,17 @@
+version: '3.8'
+
+services:
+  discord-ai-multibot-manager:
+    image: node:20-alpine
+    container_name: discord-ai-multibot-manager
+    restart: unless-stopped
+    working_dir: /app
+    ports:
+      - "3010:3000"
+    volumes:
+      # Mount the entire project folder from your host (e.g. Synology NAS volume)
+      - /volume1/docker/discord-ai-multibot-manager:/app
+    environment:
+      - NODE_ENV=production
+    # This automatically installs, compiles, and starts the application inside the container
+    command: sh -c "npm install --include=dev && npm run build && npm run start"
