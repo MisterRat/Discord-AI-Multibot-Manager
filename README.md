@@ -60,7 +60,7 @@ In the **Web editor** box, paste the the contents of the docker-compose.yml file
 
 ### Why we use Volumes
 Without a volume, any settings you change in the web dashboard (like your Discord Token, prompts, and OpenAI/Gemini API Keys) will be wiped out whenever the container reboots or gets updated. 
-The configuration above creates a persistent volume named `bot_config` inside Portainer to keep your `config.json` safe.  NOTE: all the files from this project need to be in the folder specified under "volumes" in the YAML; i.e. /volume1/docker/discord-bot-manager
+The configuration above creates a persistent volume named `bot_config` inside Portainer to keep your `config.json` safe.  ⚠️ CRITICAL: all the files from this project need to be in the folder specified under "volumes" in the YAML; i.e. /volume1/docker/discord-bot-manager
 
 ### Step 3: Deploy the Stack
 1. Scroll down to the bottom of the stack creation page.
