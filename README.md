@@ -1,11 +1,9 @@
-# 🤖 Discord AI Bot Manager
-
-A beautiful, self-hosted web dashboard and management service to deploy, configure, monitor, and auto-start an AI-powered Discord bot. Features real-time log streaming, system metrics, and auto-start recovery using an OpenAI or Gemini API compatible backend.
+# 🤖 Discord AI Multi-Bot Manager (Bot Orchestra)
+A self-hosted web dashboard and management service to deploy, configure, monitor, and auto-start multiple independent AI-powered Discord bots simultaneously. Features real-time log streaming for each bot, individual target LLM settings, system resource metrics, and auto-start recovery using OpenAI or Gemini API compatible backends.
 
 ---
 
 ## 🛠 Prerequisite: Create Your Discord Bot
-
 Setting up a Discord Bot for the first time can be confusing. Follow these exact steps to obtain the correct keys and grant the necessary permissions.
 
 ### Step 1: Create a Discord Developer Application
@@ -45,8 +43,12 @@ If you do not do this step, the bot will join your server but will be unable to 
 
 ---
 
-## 🐋 Deploying with Portainer
+> 💡 **Multi-Bot Management Note:** Since this application supports running **multiple independent bots simultaneously**, you can repeat the prerequisite steps above for each Discord bot account you wish to create. Each bot in your dashboard will have its own custom token, custom prompt, and custom trigger behaviors!
 
+---
+
+
+## 🐋 Deploying with Portainer
 Portainer is a powerful UI for managing Docker containers. You can deploy this service easily as a Portainer **Stack** (Docker Compose).
 
 ### Step 1: Create a New Stack in Portainer
@@ -56,11 +58,31 @@ Portainer is a powerful UI for managing Docker containers. You can deploy this s
 4. Name your stack (e.g., `discord-ai-bot`).
 
 ### Step 2: Paste the Docker Compose Configuration
-In the **Web editor** box, paste the the contents of the docker-compose.yml file.
+In the **Web editor** box, paste the following `docker-compose.yml` configuration:
+
+```yaml
+version: '3.8'
+
+services:
+  discord-ai-multibot-manager:
+    image: node:20-alpine
+    container_name: discord-ai-multibot-manager
+    restart: unless-stopped
+    working_dir: /app
+    ports:
+      - "3010:3000"
+    volumes:
+      # Mount the entire project folder from your host (e.g. Synology NAS volume)
+      - /volume1/docker/discord-ai-multibot-manager:/app
+    environment:
+      - NODE_ENV=production
+    # This automatically installs, compiles, and starts the application inside the container
+    command: sh -c "npm install --include=dev && npm run build && npm run start"
+```
 
 ### Why we use Volumes
 Without a volume, any settings you change in the web dashboard (like your Discord Token, prompts, and OpenAI/Gemini API Keys) will be wiped out whenever the container reboots or gets updated. 
-The configuration above creates a persistent volume named `bot_config` inside Portainer to keep your `config.json` safe.  ⚠️ CRITICAL: all the files from this project need to be in the folder specified under "volumes" in the YAML; i.e. /volume1/docker/discord-bot-manager
+The configuration above mounts your host project directory to `/app` inside the container to keep your `config.json` safe.  ⚠️ CRITICAL: all the files from this project need to be in the folder specified under "volumes" in the YAML; i.e. `/volume1/docker/discord-ai-multibot-manager`
 
 ### Step 3: Deploy the Stack
 1. Scroll down to the bottom of the stack creation page.
