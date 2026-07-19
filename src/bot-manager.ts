@@ -354,39 +354,117 @@ export class SingleBotRunner {
     const cleanKey = (this.config.openaiApiKey || '').trim();
     const cleanModel = (this.config.modelName || '').trim();
 
-    const openai = new OpenAI({
-      baseURL: cleanUrl,
-      apiKey: cleanKey || 'no-key-required',
-    });
+    let baseUrl = cleanUrl;
+    if (baseUrl.endsWith('/')) {
+      baseUrl = baseUrl.slice(0, -1);
+    }
+    const completionsUrl = `${baseUrl}/chat/completions`;
 
     const messages = [
       { role: 'system', content: this.config.systemPrompt },
       ...history,
     ];
 
-    try {
-      const completion = await openai.chat.completions.create({
-        model: cleanModel,
-        messages: messages as any,
-        temperature: this.config.temperature,
-        max_tokens: this.config.maxTokens,
-      });
-
-      return completion.choices[0]?.message?.content || 'No response generated.';
-    } catch (err: any) {
-      this.addLog(
-        'warn',
-        `Primary completion attempt failed: ${err.message}. Retrying without max_tokens or temperature parameters...`
-      );
-      try {
-        const completion = await openai.chat.completions.create({
-          model: cleanModel,
-          messages: messages as any,
-        });
-        return completion.choices[0]?.message?.content || 'No response generated.';
-      } catch (fallbackErr: any) {
-        throw new Error(`AI generation failed: ${fallbackErr.message}`);
+    const makeRequest = async (includeParams: boolean) => {
+      const headers: Record<string, string> = {
+        'Content-Type': 'application/json',
+      };
+      if (cleanKey) {
+        headers['Authorization'] = `Bearer ${cleanKey}`;
       }
+
+      const body: Record<string, any> = {
+        model: cleanModel,
+        messages,
+        stream: false,
+      };
+
+      if (includeParams) {
+        if (this.config.temperature !== undefined) {
+          body.temperature = this.config.temperature;
+        }
+        if (this.config.maxTokens !== undefined) {
+          body.max_tokens = this.config.maxTokens;
+        }
+      }
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 90000); // 90 seconds timeout for bot responses
+
+      try {
+        const response = await fetch(completionsUrl, {
+          method: 'POST',
+          headers,
+          body: JSON.stringify(body),
+          signal: controller.signal,
+        });
+        clearTimeout(timeoutId);
+        return response;
+      } catch (err: any) {
+        clearTimeout(timeoutId);
+        throw err;
+      }
+    };
+
+    try {
+      let response = await makeRequest(true);
+
+      // Handle fallback if temperature/max_tokens caused a 400 Bad Request on some custom backends
+      if (response.status === 400) {
+        try {
+          const fallbackResponse = await makeRequest(false);
+          if (fallbackResponse.ok) {
+            response = fallbackResponse;
+          }
+        } catch (_) {}
+      }
+
+      if (!response.ok) {
+        const status = response.status;
+        let responseText = '';
+        try {
+          responseText = await response.text();
+        } catch (_) {}
+        throw new Error(`HTTP error ${status}: ${responseText.slice(0, 200)}`);
+      }
+
+      const responseText = await response.text();
+      let content = '';
+
+      // Robust check for SSE (Server-Sent Events) stream format in case the backend forces streaming
+      if (responseText.includes('data:')) {
+        const lines = responseText.split('\n');
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('data:')) {
+            const dataStr = trimmed.slice(5).trim();
+            if (dataStr === '[DONE]' || !dataStr) {
+              continue;
+            }
+            try {
+              const chunk = JSON.parse(dataStr);
+              const chunkContent = chunk.choices?.[0]?.delta?.content || chunk.choices?.[0]?.message?.content || '';
+              content += chunkContent;
+            } catch (_) {}
+          }
+        }
+      } else {
+        try {
+          const responseData = JSON.parse(responseText);
+          content = responseData.choices?.[0]?.message?.content || '';
+        } catch (e: any) {
+          throw new Error(`Failed to parse AI response JSON: ${e.message}. Response was: "${responseText.slice(0, 200)}"`);
+        }
+      }
+
+      if (!content.trim()) {
+        throw new Error('AI returned an empty response.');
+      }
+
+      return content.trim();
+    } catch (err: any) {
+      const errorMsg = err.name === 'AbortError' ? 'Request timed out after 90 seconds' : err.message;
+      throw new Error(`AI generation failed: ${errorMsg}`);
     }
   }
 
@@ -630,6 +708,7 @@ class BotManager {
       const body: Record<string, any> = {
         model: cleanModel,
         messages: [{ role: 'user', content: 'Ping! Answer with "Pong!" only.' }],
+        stream: false,
       };
       if (includeMaxTokens) {
         body.max_tokens = 10;
@@ -679,9 +758,39 @@ class BotManager {
         return { success: false, message: `Connection test failed: ${detailedError}` };
       }
 
-      const responseData = (await response.json()) as any;
-      const content = responseData.choices?.[0]?.message?.content?.trim() || '';
-      return { success: true, message: `Connection test successful! Server replied: "${content}"` };
+      const responseText = await response.text();
+      let content = '';
+
+      // Robust check for SSE (Server-Sent Events) stream format
+      if (responseText.includes('data:')) {
+        const lines = responseText.split('\n');
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (trimmed.startsWith('data:')) {
+            const dataStr = trimmed.slice(5).trim();
+            if (dataStr === '[DONE]' || !dataStr) {
+              continue;
+            }
+            try {
+              const chunk = JSON.parse(dataStr);
+              const chunkContent = chunk.choices?.[0]?.delta?.content || chunk.choices?.[0]?.message?.content || '';
+              content += chunkContent;
+            } catch (_) {}
+          }
+        }
+      } else {
+        try {
+          const responseData = JSON.parse(responseText);
+          content = responseData.choices?.[0]?.message?.content || '';
+        } catch (e: any) {
+          return {
+            success: false,
+            message: `Connection test failed to parse JSON: ${e.message}. Response was: "${responseText.slice(0, 200)}"`
+          };
+        }
+      }
+
+      return { success: true, message: `Connection test successful! Server replied: "${content.trim()}"` };
     } catch (err: any) {
       const errorMsg = err.name === 'AbortError' ? 'Request timed out after 60 seconds' : err.message;
       return { success: false, message: `Connection test failed: ${errorMsg}` };

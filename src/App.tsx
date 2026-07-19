@@ -33,6 +33,7 @@ import {
   Trash2,
 } from 'lucide-react';
 import { BotConfig, BotStatus, LogEntry, BotInstanceData } from './types';
+import pkg from '../package.json';
 
 const DEFAULT_CONFIG: BotConfig = {
   discordToken: '',
@@ -366,7 +367,12 @@ export default function App() {
               M
             </div>
             <div>
-              <span className="font-bold tracking-tight text-sm text-white block">BOT ORCHESTRA</span>
+              <div className="flex items-center gap-2">
+                <span className="font-bold tracking-tight text-sm text-white block">BOT ORCHESTRA</span>
+                <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 bg-indigo-950 text-indigo-300 rounded border border-indigo-800/40 shrink-0">
+                  v{pkg.version}
+                </span>
+              </div>
               <span className="text-[10px] text-indigo-400 font-semibold tracking-wider uppercase">Multi-bot Manager</span>
             </div>
           </div>
