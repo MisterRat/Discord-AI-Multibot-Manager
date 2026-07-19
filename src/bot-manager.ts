@@ -13,7 +13,7 @@ const DEFAULT_CONFIG: BotConfig = {
   modelName: 'gpt-4o-mini',
   systemPrompt: 'You are a helpful and friendly Discord AI assistant.',
   temperature: 0.7,
-  maxTokens: 500,
+  maxTokens: 512,
   respondToMentions: true,
   respondToPrefix: false,
   prefix: '!',

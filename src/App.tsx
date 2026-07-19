@@ -44,7 +44,7 @@ const DEFAULT_CONFIG: BotConfig = {
   modelName: 'gpt-4o-mini',
   systemPrompt: 'You are a helpful and friendly Discord AI assistant.',
   temperature: 0.7,
-  maxTokens: 500,
+  maxTokens: 512,
   respondToMentions: true,
   respondToPrefix: false,
   prefix: '!',
@@ -398,10 +398,10 @@ export default function App() {
 
   // Fetch available models on tab open
   useEffect(() => {
-    if (activeTab === 'ai_settings' && config.openaiBaseUrl && modelsList.length === 0) {
+    if (activeTab === 'ai_settings' && config.openaiBaseUrl && config.openaiApiKey && modelsList.length === 0) {
       handleFetchModels();
     }
-  }, [activeTab, selectedBotId]);
+  }, [activeTab, selectedBotId, config.openaiBaseUrl, config.openaiApiKey, modelsList.length]);
 
   const handleConfigChange = <K extends keyof BotConfig>(key: K, value: BotConfig[K]) => {
     setConfig((prev) => ({ ...prev, [key]: value }));
@@ -547,7 +547,7 @@ export default function App() {
   };
 
   const handleFetchModels = async () => {
-    if (!config.openaiBaseUrl) return;
+    if (!config.openaiBaseUrl || !config.openaiApiKey) return;
     setFetchingModels(true);
     setModelsError(null);
     try {
@@ -1569,9 +1569,9 @@ export default function App() {
                           </div>
                           <input
                             type="range"
-                            min="50"
-                            max="4000"
-                            step="50"
+                            min="128"
+                            max="8192"
+                            step="128"
                             value={config.maxTokens}
                             onChange={(e) => handleConfigChange('maxTokens', parseInt(e.target.value))}
                             className="w-full h-1.5 bg-slate-900 rounded-lg appearance-none cursor-pointer accent-indigo-500"
@@ -1582,7 +1582,7 @@ export default function App() {
                   </div>
 
                   {/* Save Footer */}
-                  <div className="sticky bottom-4 z-10 flex justify-end items-center gap-4 bg-slate-900/95 border border-slate-800 rounded-2xl p-4 shadow-2xl backdrop-blur-md">
+                  <div className="flex justify-end items-center gap-4 mt-6">
                     <span className="text-xs text-slate-400 hidden sm:inline">
                       Commit setting shifts to update this live bot runtime execution.
                     </span>
@@ -1829,7 +1829,7 @@ export default function App() {
                   </div>
 
                   {/* Save Footer */}
-                  <div className="sticky bottom-4 z-10 flex justify-end items-center gap-4 bg-slate-900/95 border border-slate-800 rounded-2xl p-4 shadow-2xl backdrop-blur-md">
+                  <div className="flex justify-end items-center gap-4 mt-6">
                     <span className="text-xs text-slate-400 hidden sm:inline">
                       Commit setting shifts to update this live bot runtime execution.
                     </span>

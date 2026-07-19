@@ -106,7 +106,7 @@ The configuration above mounts your host project directory to `/app` inside the 
      - **Bot Instance Name**: Custom nickname for your dashboard.
      - **API Target Endpoint & Key**: Configure your AI backend (Ollama, LM Studio, Groq, Gemini, or OpenAI official).
      - **Target AI Model ID**: Use custom IDs or fetch the automatic list from your endpoint.
-       > 💡 **Gemini API Model Loading Note:** The Gemini API does not allow model listing via standard OpenAI-compatible endpoints directly, which will cause a `401 Unauthorized` error if you click the **Load Models** refresh button. Instead of auto-fetching, **you must manually enter your Target AI Model ID** (e.g., `gemini-3.1-flash-lite`) after setting your API base URL and Key, then save your configuration.
+       > 💡 **Gemini API Tip:** Enter `https://generativelanguage.googleapis.com/v1beta/openai` as your base URL.  Go to `https://aistudio.google.com/projects` to create a project and get a key. 
    - Go to the **Triggers & Access** tab to set:
      - **Discord Token**: Paste the token copied in *Prerequisite: Step 2*.
      - **Behavior**: Choose if the bot responds to direct mentions, DMs, or custom prefixes (e.g., `!`).
