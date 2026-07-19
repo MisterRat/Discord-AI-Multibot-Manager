@@ -1,4 +1,4 @@
-# 🤖 Discord AI Multi-Bot Manager (Bot Orchestra)
+# 🤖 Discord AI Multibot Manager
 A self-hosted web dashboard and management service to deploy, configure, monitor, and auto-start multiple independent AI-powered Discord bots simultaneously. Features real-time log streaming for each bot, individual target LLM settings, system resource metrics, and auto-start recovery using OpenAI or Gemini API compatible backends.
 
 ---
@@ -43,7 +43,7 @@ If you do not do this step, the bot will join your server but will be unable to 
 
 ---
 
-> 💡 **Multi-Bot Management Note:** Since this application supports running **multiple independent bots simultaneously**, you can repeat the prerequisite steps above for each Discord bot account you wish to create. Each bot in your dashboard will have its own custom token, custom prompt, and custom trigger behaviors!
+> 💡 **Multibot Management Note:** Since this application supports running **multiple independent bots simultaneously**, you can repeat the prerequisite steps above for each Discord bot account you wish to create. Each bot in your dashboard will have its own custom token, custom prompt, and custom trigger behaviors!
 
 ---
 
@@ -93,8 +93,8 @@ The configuration above mounts your host project directory to `/app` inside the 
 
 ## 💻 Initial Dashboard Setup
 
-1. Open your web browser and navigate to `http://<your-server-ip>:3010` (or whichever port you mapped your container's port `3000` to, e.g., `http://192.168.1.50:3010`).
-2. You will be greeted by the **Bot Orchestra Multi-Bot Manager** dashboard.
+1. Open your web browser and navigate to `http://<your-server-ip>:3010` (or whichever port you mapped your container's port `3000` to, e.g., `http://localhost:3010`).
+2. You will be greeted by the **Discord AI Multibot Manager** dashboard.
 3. **Select or Create a Bot Instance**:
    - By default, a **Primary Bot** instance is pre-configured.
    - To add more bots, click **+ Add bot** in the top-right of the **Bot Instances** sidebar panel, enter a name, and hit create.
@@ -115,3 +115,9 @@ The configuration above mounts your host project directory to `/app` inside the 
 6. **Monitor and Manage**:
    - Use the **Dashboard** and **Terminal Logs** tabs to view live logs, track connection latency, and check active guild/member count.
    - Keep track of total chats, system SLA metrics, and Docker container CPU/RAM allocations directly from the sidebar.
+7. **Secure Your Instance (UI Security Lock)**:
+   - Located at the bottom of the left sidebar is the **UI Lock** status card.
+   - Click **Setup** to set a custom passcode (PIN) to secure administrative actions.
+   - Once set, the dashboard can be locked. When locked, sensitive credentials (like OpenAI API Keys and Discord Bot Tokens) are completely masked, and administrative actions (saving configurations, starting/stopping bots) are restricted.
+   - **Accidental Lockout Protection**: To prevent lockouts from typos during passcode setup, clicking **Lock** will require you to verify your passcode first to confirm you remember it before the dashboard session is secured.
+
