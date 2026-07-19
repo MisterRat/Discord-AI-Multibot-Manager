@@ -46,6 +46,19 @@ async function startServer() {
     res.json(botManager.getBotsData());
   });
 
+  app.post("/api/bots/reorder", requirePasscode, (req, res) => {
+    const { order } = req.body;
+    if (!Array.isArray(order)) {
+      return res.status(400).json({ error: "Order array of bot IDs is required" });
+    }
+    const success = botManager.reorderBots(order);
+    if (success) {
+      res.json({ success: true });
+    } else {
+      res.status(400).json({ error: "Failed to reorder bots" });
+    }
+  });
+
   app.post("/api/bots", requirePasscode, (req, res) => {
     const { name, config } = req.body;
     if (!name) {

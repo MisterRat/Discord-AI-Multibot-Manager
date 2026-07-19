@@ -567,6 +567,28 @@ class BotManager {
     return true;
   }
 
+  public reorderBots(order: string[]): boolean {
+    const newRunners = new Map<string, SingleBotRunner>();
+    
+    for (const id of order) {
+      const runner = this.runners.get(id);
+      if (runner) {
+        newRunners.set(id, runner);
+      }
+    }
+    
+    for (const [id, runner] of this.runners.entries()) {
+      if (!newRunners.has(id)) {
+        newRunners.set(id, runner);
+      }
+    }
+    
+    this.runners = newRunners;
+    this.saveConfigDisk();
+    this.broadcastGlobal();
+    return true;
+  }
+
   private handleRunnerUpdate(type: 'log' | 'status', botId: string, payload: any) {
     if (type === 'log') {
       this.logSubscribers.forEach((sub) => sub({ botId, log: payload }));

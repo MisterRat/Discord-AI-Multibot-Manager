@@ -32,6 +32,7 @@ import {
   Bell,
   RefreshCw,
   Trash2,
+  GripVertical,
 } from 'lucide-react';
 import { BotConfig, BotStatus, LogEntry, BotInstanceData } from './types';
 import pkg from '../package.json';
@@ -56,6 +57,48 @@ const DEFAULT_CONFIG: BotConfig = {
 export default function App() {
   const [bots, setBots] = useState<BotInstanceData[]>([]);
   const [selectedBotId, setSelectedBotId] = useState<string | null>(null);
+  const [draggedBotId, setDraggedBotId] = useState<string | null>(null);
+
+  const handleDragStart = (e: React.DragEvent, id: string) => {
+    if (!checkActionPermission()) {
+      e.preventDefault();
+      return;
+    }
+    setDraggedBotId(id);
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', id);
+  };
+
+  const handleDragOver = (e: React.DragEvent, id: string) => {
+    e.preventDefault();
+    if (!draggedBotId || draggedBotId === id) return;
+
+    const draggedIndex = bots.findIndex((b) => b.id === draggedBotId);
+    const targetIndex = bots.findIndex((b) => b.id === id);
+
+    if (draggedIndex !== -1 && targetIndex !== -1) {
+      const updatedBots = [...bots];
+      const [removed] = updatedBots.splice(draggedIndex, 1);
+      updatedBots.splice(targetIndex, 0, removed);
+      setBots(updatedBots);
+    }
+  };
+
+  const handleDragEnd = async () => {
+    if (!draggedBotId) return;
+    setDraggedBotId(null);
+
+    try {
+      const order = bots.map((b) => b.id);
+      await fetch('/api/bots/reorder', {
+        method: 'POST',
+        headers: getHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ order }),
+      });
+    } catch (err) {
+      console.error('Failed to save bot order:', err);
+    }
+  };
 
   // Form states bound to active selection
   const [config, setConfig] = useState<BotConfig>(DEFAULT_CONFIG);
@@ -577,8 +620,8 @@ export default function App() {
         </div>
 
         {/* Bot Selector Panel */}
-        <div className="px-4 py-2 border-b border-slate-800/60 mb-3">
-          <div className="flex items-center justify-between text-[10px] text-slate-500 uppercase font-black tracking-widest mb-2 px-1">
+        <div className="px-4 py-2 border-b border-slate-800/60 mb-3 flex flex-col flex-1 min-h-0">
+          <div className="flex items-center justify-between text-[10px] text-slate-500 uppercase font-black tracking-widest mb-2 px-1 shrink-0">
             <span>Bot Instances</span>
             <button
               onClick={() => setShowCreateModal(true)}
@@ -588,7 +631,7 @@ export default function App() {
             </button>
           </div>
           
-          <div className="space-y-1.5 max-h-48 overflow-y-auto pr-1">
+          <div className="space-y-1.5 overflow-y-auto pr-1 flex-1 min-h-0">
             {bots.length === 0 ? (
               <div className="text-[11px] text-slate-500 p-2 text-center border border-dashed border-slate-800 rounded-xl">
                 No bot instances
@@ -602,36 +645,53 @@ export default function App() {
                 const isError = botStatus === 'error';
 
                 return (
-                  <button
+                  <div
                     key={bot.id}
-                    onClick={() => setSelectedBotId(bot.id)}
-                    className={`w-full flex items-center justify-between px-3 py-2 rounded-xl text-left font-medium text-xs transition-all duration-150 cursor-pointer ${
-                      isSelected
-                        ? 'bg-indigo-600/15 text-indigo-300 border border-indigo-500/35'
-                        : 'text-slate-400 hover:bg-slate-800/40 hover:text-slate-200 border border-transparent'
+                    draggable={true}
+                    onDragStart={(e) => handleDragStart(e, bot.id)}
+                    onDragOver={(e) => handleDragOver(e, bot.id)}
+                    onDragEnd={handleDragEnd}
+                    className={`flex items-center gap-1 w-full group relative rounded-xl transition-all duration-150 ${
+                      bot.id === draggedBotId
+                        ? 'opacity-30 border border-dashed border-slate-700 bg-slate-950/20'
+                        : 'border border-transparent'
                     }`}
                   >
-                    <div className="flex items-center gap-2 min-w-0">
-                      {bot.status.avatarUrl ? (
-                        <img
-                          src={bot.status.avatarUrl}
-                          alt=""
-                          className="w-4.5 h-4.5 rounded-full shrink-0"
-                          referrerPolicy="no-referrer"
-                        />
-                      ) : (
-                        <Bot className="w-4 h-4 shrink-0" />
-                      )}
-                      <span className="truncate">{bot.name}</span>
+                    {/* Grab handle */}
+                    <div className="p-1 cursor-grab active:cursor-grabbing text-slate-600 hover:text-slate-400 transition-colors shrink-0 flex items-center justify-center opacity-0 group-hover:opacity-100 focus-within:opacity-100 select-none">
+                      <GripVertical className="w-3.5 h-3.5" />
                     </div>
-                    
-                    <span className={`w-2 h-2 rounded-full shrink-0 ${
-                      isActive ? 'bg-green-500 animate-pulse' :
-                      isStarting ? 'bg-amber-500 animate-pulse' :
-                      isError ? 'bg-rose-500' :
-                      'bg-slate-600'
-                    }`} />
-                  </button>
+
+                    <button
+                      onClick={() => setSelectedBotId(bot.id)}
+                      className={`flex-1 flex items-center justify-between px-2.5 py-2 rounded-xl text-left font-medium text-xs transition-all duration-150 cursor-pointer min-w-0 ${
+                        isSelected
+                          ? 'bg-indigo-600/15 text-indigo-300 border border-indigo-500/35'
+                          : 'text-slate-400 hover:bg-slate-800/40 hover:text-slate-200 border border-transparent'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        {bot.status.avatarUrl ? (
+                          <img
+                            src={bot.status.avatarUrl}
+                            alt=""
+                            className="w-4.5 h-4.5 rounded-full shrink-0"
+                            referrerPolicy="no-referrer"
+                          />
+                        ) : (
+                          <Bot className="w-4 h-4 shrink-0" />
+                        )}
+                        <span className="truncate">{bot.name}</span>
+                      </div>
+                      
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${
+                        isActive ? 'bg-green-500 animate-pulse' :
+                        isStarting ? 'bg-amber-500 animate-pulse' :
+                        isError ? 'bg-rose-500' :
+                        'bg-slate-600'
+                      }`} />
+                    </button>
+                  </div>
                 );
               })
             )}
@@ -639,7 +699,7 @@ export default function App() {
         </div>
 
         {/* Sidebar Nav Items */}
-        <nav className="flex-1 px-4 space-y-1">
+        <nav className="px-4 space-y-1 shrink-0 mb-4">
           <button
             onClick={() => setActiveTab('dashboard')}
             className={`w-full flex items-center justify-between px-4 py-2.5 rounded-xl font-medium text-sm transition-all duration-200 cursor-pointer ${
