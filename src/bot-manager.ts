@@ -488,12 +488,31 @@ export class SingleBotRunner {
 
 class BotManager {
   private runners = new Map<string, SingleBotRunner>();
+  private adminPasscode = '';
   private logSubscribers = new Set<(payload: { botId: string; log: LogEntry }) => void>();
   private statusSubscribers = new Set<(payload: { botId: string; status: BotStatus }) => void>();
   private globalSubscribers = new Set<() => void>();
 
   constructor() {
     this.loadConfig();
+  }
+
+  public getHasPasscode(): boolean {
+    return !!this.adminPasscode;
+  }
+
+  public verifyPasscode(code: string): boolean {
+    if (!this.adminPasscode) return true;
+    return this.adminPasscode === code;
+  }
+
+  public setPasscode(newCode: string, currentCode: string): boolean {
+    if (this.adminPasscode && this.adminPasscode !== currentCode) {
+      return false;
+    }
+    this.adminPasscode = newCode;
+    this.saveConfigDisk();
+    return true;
   }
 
   public getBots(): SingleBotRunner[] {
@@ -578,6 +597,7 @@ class BotManager {
   private saveConfigDisk() {
     try {
       const exportData = {
+        adminPasscode: this.adminPasscode,
         bots: this.getBots().map((runner) => ({
           id: runner.id,
           name: runner.name,
@@ -592,9 +612,19 @@ class BotManager {
 
   private loadConfig() {
     try {
+      if (!fs.existsSync(CONFIG_PATH)) {
+        const examplePath = path.join(process.cwd(), 'config.example.json');
+        if (fs.existsSync(examplePath)) {
+          fs.copyFileSync(examplePath, CONFIG_PATH);
+        }
+      }
       if (fs.existsSync(CONFIG_PATH)) {
         const content = fs.readFileSync(CONFIG_PATH, 'utf-8');
         const parsed = JSON.parse(content);
+
+        if (parsed && typeof parsed === 'object') {
+          this.adminPasscode = parsed.adminPasscode || '';
+        }
 
         // Check format: old vs new
         if (parsed && Array.isArray(parsed.bots)) {

@@ -1,0 +1,25 @@
+{
+  "adminPasscode": "",
+  "bots": [
+    {
+      "id": "default",
+      "name": "Primary Bot",
+      "config": {
+        "discordToken": "",
+        "openaiBaseUrl": "https://api.openai.com/v1",
+        "openaiApiKey": "",
+        "modelName": "gpt-4o-mini",
+        "systemPrompt": "You are a helpful and friendly Discord AI assistant.",
+        "temperature": 0.7,
+        "maxTokens": 500,
+        "respondToMentions": true,
+        "respondToPrefix": false,
+        "prefix": "!",
+        "respondToDMs": true,
+        "allowedChannels": "",
+        "allowedGuilds": "",
+        "autoStart": true
+      }
+    }
+  ]
+}

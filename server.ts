@@ -9,12 +9,44 @@ async function startServer() {
 
   app.use(express.json());
 
+  // Passcode verification middleware
+  const requirePasscode = (req: any, res: any, next: any) => {
+    if (botManager.getHasPasscode()) {
+      const providedCode = req.headers["x-admin-passcode"];
+      if (!botManager.verifyPasscode(providedCode)) {
+        return res.status(401).json({ error: "Unauthorized: Invalid or missing admin passcode" });
+      }
+    }
+    next();
+  };
+
+  // Security Endpoints
+  app.get("/api/security/status", (req, res) => {
+    res.json({ hasPasscode: botManager.getHasPasscode() });
+  });
+
+  app.post("/api/security/verify", (req, res) => {
+    const { passcode } = req.body;
+    const success = botManager.verifyPasscode(passcode);
+    res.json({ success });
+  });
+
+  app.post("/api/security/setup", (req, res) => {
+    const { passcode, currentPasscode } = req.body;
+    const success = botManager.setPasscode(passcode || '', currentPasscode || '');
+    if (success) {
+      res.json({ success: true, message: passcode ? "Passcode set successfully" : "Passcode cleared successfully" });
+    } else {
+      res.status(400).json({ error: "Invalid current passcode" });
+    }
+  });
+
   // API Routes
   app.get("/api/bots", (req, res) => {
     res.json(botManager.getBotsData());
   });
 
-  app.post("/api/bots", (req, res) => {
+  app.post("/api/bots", requirePasscode, (req, res) => {
     const { name, config } = req.body;
     if (!name) {
       return res.status(400).json({ error: "Bot name is required" });
@@ -23,7 +55,7 @@ async function startServer() {
     res.json({ success: true, bot: { id: runner.id, name: runner.name, config: runner.config, status: runner.getStatus() } });
   });
 
-  app.put("/api/bots/:id", (req, res) => {
+  app.put("/api/bots/:id", requirePasscode, (req, res) => {
     const { id } = req.params;
     const { name, config } = req.body;
     const success = botManager.updateBot(id, name, config);
@@ -35,7 +67,7 @@ async function startServer() {
     }
   });
 
-  app.delete("/api/bots/:id", async (req, res) => {
+  app.delete("/api/bots/:id", requirePasscode, async (req, res) => {
     const { id } = req.params;
     const success = await botManager.deleteBot(id);
     if (success) {
@@ -45,7 +77,7 @@ async function startServer() {
     }
   });
 
-  app.post("/api/bots/:id/start", async (req, res) => {
+  app.post("/api/bots/:id/start", requirePasscode, async (req, res) => {
     const { id } = req.params;
     const runner = botManager.getBot(id);
     if (!runner) {
@@ -55,7 +87,7 @@ async function startServer() {
     res.json({ success, status: runner.getStatus() });
   });
 
-  app.post("/api/bots/:id/stop", async (req, res) => {
+  app.post("/api/bots/:id/stop", requirePasscode, async (req, res) => {
     const { id } = req.params;
     const runner = botManager.getBot(id);
     if (!runner) {
@@ -65,7 +97,7 @@ async function startServer() {
     res.json({ success, status: runner.getStatus() });
   });
 
-  app.post("/api/bots/:id/clear-history", (req, res) => {
+  app.post("/api/bots/:id/clear-history", requirePasscode, (req, res) => {
     const { id } = req.params;
     const runner = botManager.getBot(id);
     if (!runner) {
@@ -75,7 +107,7 @@ async function startServer() {
     res.json({ success: true });
   });
 
-  app.post("/api/test-openai", async (req, res) => {
+  app.post("/api/test-openai", requirePasscode, async (req, res) => {
     const { url, apiKey, model } = req.body;
     const result = await botManager.testOpenAIConnection(url, apiKey, model);
     res.json(result);

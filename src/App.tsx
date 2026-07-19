@@ -27,6 +27,7 @@ import {
   Layers,
   Sparkles,
   Lock,
+  Unlock,
   Globe,
   Bell,
   RefreshCw,
@@ -59,6 +60,181 @@ export default function App() {
   // Form states bound to active selection
   const [config, setConfig] = useState<BotConfig>(DEFAULT_CONFIG);
   const [botName, setBotName] = useState<string>('');
+
+  // Security lock states
+  const [hasPasscode, setHasPasscode] = useState(false);
+  const [isUnlocked, setIsUnlocked] = useState(true);
+  const [passcode, setPasscode] = useState('');
+  const [showUnlockModal, setShowUnlockModal] = useState(false);
+  const [showSecuritySetupModal, setShowSecuritySetupModal] = useState(false);
+  
+  // Security form states
+  const [inputPasscode, setInputPasscode] = useState('');
+  const [unlockError, setUnlockError] = useState('');
+  const [showLockVerifyModal, setShowLockVerifyModal] = useState(false);
+  const [lockVerifyPasscode, setLockVerifyPasscode] = useState('');
+  const [lockVerifyError, setLockVerifyError] = useState('');
+  
+  const [setupCurrentPasscode, setSetupCurrentPasscode] = useState('');
+  const [setupNewPasscode, setSetupNewPasscode] = useState('');
+  const [setupConfirmPasscode, setSetupConfirmPasscode] = useState('');
+  const [setupError, setSetupError] = useState('');
+  const [setupSuccess, setSetupSuccess] = useState('');
+
+  const isCurrentlyLocked = hasPasscode && !isUnlocked;
+
+  // Fetch initial security status and check session storage
+  useEffect(() => {
+    const fetchSecurityStatus = async () => {
+      try {
+        const res = await fetch('/api/security/status');
+        const data = await res.json();
+        setHasPasscode(data.hasPasscode);
+        
+        const savedCode = sessionStorage.getItem('admin_passcode') || '';
+        if (savedCode && data.hasPasscode) {
+          const verifyRes = await fetch('/api/security/verify', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ passcode: savedCode })
+          });
+          const verifyData = await verifyRes.json();
+          if (verifyData.success) {
+            setPasscode(savedCode);
+            setIsUnlocked(true);
+          } else {
+            sessionStorage.removeItem('admin_passcode');
+            setIsUnlocked(false);
+          }
+        } else if (data.hasPasscode) {
+          setIsUnlocked(false);
+        } else {
+          setIsUnlocked(true);
+        }
+      } catch (err) {
+        console.error('Failed to fetch security status:', err);
+      }
+    };
+    fetchSecurityStatus();
+  }, []);
+
+  const getHeaders = (extraHeaders: Record<string, string> = {}) => {
+    const headers: Record<string, string> = { ...extraHeaders };
+    if (passcode) {
+      headers['X-Admin-Passcode'] = passcode;
+    }
+    return headers;
+  };
+
+  const checkActionPermission = (): boolean => {
+    if (hasPasscode && !isUnlocked) {
+      setShowUnlockModal(true);
+      return false;
+    }
+    return true;
+  };
+
+  const handleVerifyUnlock = async (): Promise<boolean> => {
+    if (!inputPasscode) return false;
+    try {
+      const res = await fetch('/api/security/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ passcode: inputPasscode }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setPasscode(inputPasscode);
+        setIsUnlocked(true);
+        sessionStorage.setItem('admin_passcode', inputPasscode);
+        setUnlockError('');
+        return true;
+      } else {
+        setUnlockError('Invalid passcode. Access denied.');
+        return false;
+      }
+    } catch (err: any) {
+      setUnlockError(err.message || 'Verification failed due to a network error.');
+      return false;
+    }
+  };
+
+  const handleVerifyAndLock = async (): Promise<boolean> => {
+    if (!lockVerifyPasscode) return false;
+    try {
+      const res = await fetch('/api/security/verify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ passcode: lockVerifyPasscode }),
+      });
+      const data = await res.json();
+      if (data.success) {
+        setIsUnlocked(false);
+        setPasscode('');
+        sessionStorage.removeItem('admin_passcode');
+        setLockVerifyError('');
+        return true;
+      } else {
+        setLockVerifyError('Invalid passcode. You must verify your correct passcode before locking.');
+        return false;
+      }
+    } catch (err: any) {
+      setLockVerifyError(err.message || 'Verification failed due to a network error.');
+      return false;
+    }
+  };
+
+  const handleSaveSecuritySetup = async () => {
+    if (setupNewPasscode && setupNewPasscode !== setupConfirmPasscode) {
+      setSetupError('New passcodes do not match.');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/security/setup', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          passcode: setupNewPasscode,
+          currentPasscode: setupCurrentPasscode,
+        }),
+      });
+      
+      const data = await res.json();
+      
+      if (res.ok) {
+        setSetupSuccess(setupNewPasscode ? 'Admin passcode configured successfully!' : 'Admin passcode disabled successfully.');
+        setSetupError('');
+        
+        // Reset inputs
+        setSetupCurrentPasscode('');
+        setSetupNewPasscode('');
+        setSetupConfirmPasscode('');
+        
+        // Update local state
+        const hasCode = !!setupNewPasscode;
+        setHasPasscode(hasCode);
+        if (hasCode) {
+          setPasscode(setupNewPasscode);
+          setIsUnlocked(true);
+          sessionStorage.setItem('admin_passcode', setupNewPasscode);
+        } else {
+          setPasscode('');
+          setIsUnlocked(true);
+          sessionStorage.removeItem('admin_passcode');
+        }
+        
+        setTimeout(() => {
+          setShowSecuritySetupModal(false);
+          setSetupSuccess('');
+        }, 1500);
+      } else {
+        setSetupError(data.error || 'Failed to update passcode lock settings.');
+      }
+    } catch (err: any) {
+      setSetupError(err.message || 'Failed to save security settings.');
+    }
+  };
 
   const [activeTab, setActiveTab] = useState<'dashboard' | 'ai_settings' | 'triggers' | 'logs'>('dashboard');
 
@@ -189,15 +365,16 @@ export default function App() {
     if (saveStatus !== 'idle') setSaveStatus('idle');
   };
 
-  const handleSaveConfig = async (e?: React.FormEvent) => {
+  const handleSaveConfig = async (e?: React.FormEvent): Promise<boolean> => {
     if (e) e.preventDefault();
-    if (!selectedBot) return;
+    if (!selectedBot) return false;
+    if (!checkActionPermission()) return false;
 
     setSaveStatus('saving');
     try {
       const res = await fetch(`/api/bots/${selectedBot.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           name: botName,
           config,
@@ -206,25 +383,36 @@ export default function App() {
       if (res.ok) {
         setSaveStatus('saved');
         setTimeout(() => setSaveStatus('idle'), 3000);
+        return true;
       } else {
         setSaveStatus('error');
+        return false;
       }
     } catch (err) {
       console.error(err);
       setSaveStatus('error');
+      return false;
     }
   };
 
   const handleStartBot = async () => {
     if (!selectedBot) return;
+    if (!checkActionPermission()) return;
     const { status } = selectedBot.status;
     if (status === 'running' || status === 'starting') return;
 
     setControlLoading(true);
     try {
       // Auto-save form content first
-      await handleSaveConfig();
-      const res = await fetch(`/api/bots/${selectedBot.id}/start`, { method: 'POST' });
+      const saved = await handleSaveConfig();
+      if (!saved) {
+        setControlLoading(false);
+        return;
+      }
+      const res = await fetch(`/api/bots/${selectedBot.id}/start`, {
+        method: 'POST',
+        headers: getHeaders(),
+      });
       await res.json();
     } catch (err) {
       console.error(err);
@@ -235,12 +423,16 @@ export default function App() {
 
   const handleStopBot = async () => {
     if (!selectedBot) return;
+    if (!checkActionPermission()) return;
     const { status } = selectedBot.status;
     if (status === 'idle' || status === 'stopped') return;
 
     setControlLoading(true);
     try {
-      const res = await fetch(`/api/bots/${selectedBot.id}/stop`, { method: 'POST' });
+      const res = await fetch(`/api/bots/${selectedBot.id}/stop`, {
+        method: 'POST',
+        headers: getHeaders(),
+      });
       await res.json();
     } catch (err) {
       console.error(err);
@@ -251,11 +443,12 @@ export default function App() {
 
   const handleCreateBot = async () => {
     if (!newBotName.trim()) return;
+    if (!checkActionPermission()) return;
 
     try {
       const res = await fetch('/api/bots', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ name: newBotName.trim() }),
       });
       const data = await res.json();
@@ -271,10 +464,14 @@ export default function App() {
 
   const handleDeleteBot = async () => {
     if (!selectedBot) return;
+    if (!checkActionPermission()) return;
     if (!confirm(`Are you absolutely sure you want to delete "${selectedBot.name}"?`)) return;
 
     try {
-      const res = await fetch(`/api/bots/${selectedBot.id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/bots/${selectedBot.id}`, {
+        method: 'DELETE',
+        headers: getHeaders(),
+      });
       if (res.ok) {
         setTestResult(null);
       }
@@ -284,12 +481,13 @@ export default function App() {
   };
 
   const handleTestOpenAI = async () => {
+    if (!checkActionPermission()) return;
     setTesting(true);
     setTestResult(null);
     try {
       const res = await fetch('/api/test-openai', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: getHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           url: config.openaiBaseUrl,
           apiKey: config.openaiApiKey,
@@ -364,16 +562,16 @@ export default function App() {
         <div className="p-5 pb-3">
           <div className="flex items-center gap-3 mb-1.5">
             <div className="w-9 h-9 bg-indigo-600 rounded-xl flex items-center justify-center font-black text-xl text-white shadow-lg shadow-indigo-600/20">
-              M
+              D
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <span className="font-bold tracking-tight text-sm text-white block">BOT ORCHESTRA</span>
+                <span className="font-bold tracking-tight text-sm text-white block">DISCORD AI</span>
                 <span className="text-[9px] font-mono font-bold px-1.5 py-0.5 bg-indigo-950 text-indigo-300 rounded border border-indigo-800/40 shrink-0">
                   v{pkg.version}
                 </span>
               </div>
-              <span className="text-[10px] text-indigo-400 font-semibold tracking-wider uppercase">Multi-bot Manager</span>
+              <span className="text-[10px] text-indigo-400 font-semibold tracking-wider uppercase">Multibot Manager</span>
             </div>
           </div>
         </div>
@@ -503,39 +701,123 @@ export default function App() {
           </button>
         </nav>
 
-        {/* Sidebar Footer: Resource Metrics */}
-        <div className="p-4 mt-auto border-t border-slate-800 bg-slate-950/40">
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Docker Container</span>
-            <span className="px-2 py-0.5 bg-green-500/10 text-green-400 text-[9px] rounded font-black uppercase tracking-wider">
-              Active
-            </span>
+        {/* Sidebar Footer: Security lock & Resource Metrics */}
+        <div className="p-4 mt-auto border-t border-slate-800 bg-slate-950/40 space-y-4">
+          {/* Persistent Security lock status */}
+          <div className="bg-slate-900/60 border border-slate-800 rounded-xl p-3 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <div className={`w-8 h-8 rounded-lg flex items-center justify-center border shrink-0 ${
+                hasPasscode 
+                  ? (isUnlocked ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20' : 'bg-rose-500/10 text-rose-400 border-rose-500/25 animate-pulse')
+                  : 'bg-slate-800 text-slate-500 border-slate-700/40'
+              }`}>
+                {hasPasscode ? (
+                  isUnlocked ? <Unlock className="w-4 h-4" /> : <Lock className="w-4 h-4" />
+                ) : (
+                  <Lock className="w-4 h-4 text-slate-500" />
+                )}
+              </div>
+              <div className="text-left min-w-0">
+                <span className="text-[11px] font-bold text-slate-300 block leading-tight">UI Lock</span>
+                <span className="text-[9px] text-slate-500 block truncate">
+                  {hasPasscode ? (isUnlocked ? "Unlocked (Admin)" : "Locked") : "Unsecured"}
+                </span>
+              </div>
+            </div>
+            {hasPasscode ? (
+              isUnlocked ? (
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowLockVerifyModal(true);
+                      setLockVerifyPasscode('');
+                      setLockVerifyError('');
+                    }}
+                    className="px-2.5 py-1.5 bg-rose-500/10 hover:bg-rose-500 text-rose-400 hover:text-white border border-rose-500/20 rounded-lg text-[10px] font-bold transition-all cursor-pointer flex items-center gap-1 shrink-0"
+                    title="Lock Session"
+                  >
+                    <Lock className="w-3 h-3" />
+                    Lock
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowSecuritySetupModal(true);
+                    }}
+                    className="p-1.5 bg-slate-800 hover:bg-slate-750 text-slate-400 hover:text-slate-200 border border-slate-700/60 rounded-lg transition-all cursor-pointer shrink-0"
+                    title="PIN Settings"
+                  >
+                    <Settings className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowUnlockModal(true)}
+                  className="px-2.5 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg text-[10px] font-bold transition-all cursor-pointer shrink-0 shadow-sm"
+                >
+                  Unlock
+                </button>
+              )
+            ) : (
+              <button
+                type="button"
+                onClick={() => setShowSecuritySetupModal(true)}
+                className="px-2.5 py-1.5 bg-slate-800 hover:bg-slate-750 text-slate-300 border border-slate-700/60 rounded-lg text-[10px] font-bold transition-all cursor-pointer shrink-0"
+              >
+                Setup
+              </button>
+            )}
           </div>
 
-          <div className="space-y-1.5">
-            <div className="w-full bg-slate-800 h-1 rounded-full overflow-hidden">
-              <div
-                className="bg-indigo-500 h-full transition-all duration-1000"
-                style={{ width: `${cpuUsage}%` }}
-              />
+          {/* Docker resource metrics */}
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Docker Container</span>
+              <span className="px-2 py-0.5 bg-green-500/10 text-green-400 text-[9px] rounded font-black uppercase tracking-wider">
+                Active
+              </span>
             </div>
-            <div className="flex justify-between items-center text-[9px]">
-              <span className="text-slate-500">Container CPU</span>
-              <span className="text-slate-400 font-mono font-bold">{cpuUsage.toFixed(1)}%</span>
+
+            <div className="space-y-1.5">
+              <div className="w-full bg-slate-800 h-1 rounded-full overflow-hidden">
+                <div
+                  className="bg-indigo-500 h-full transition-all duration-1000"
+                  style={{ width: `${cpuUsage}%` }}
+                />
+              </div>
+              <div className="flex justify-between items-center text-[9px]">
+                <span className="text-slate-500">Container CPU</span>
+                <span className="text-slate-400 font-mono font-bold">{cpuUsage.toFixed(1)}%</span>
+              </div>
+            </div>
+
+            <div className="space-y-1.5">
+              <div className="w-full bg-slate-800 h-1 rounded-full overflow-hidden">
+                <div
+                  className="bg-emerald-500 h-full transition-all duration-1000"
+                  style={{ width: `${ramUsage}%` }}
+                />
+              </div>
+              <div className="flex justify-between items-center text-[9px]">
+                <span className="text-slate-500">Container RAM</span>
+                <span className="text-slate-400 font-mono font-bold">{ramUsage.toFixed(1)}%</span>
+              </div>
             </div>
           </div>
 
-          <div className="space-y-1.5 mt-2.5">
-            <div className="w-full bg-slate-800 h-1 rounded-full overflow-hidden">
-              <div
-                className="bg-emerald-500 h-full transition-all duration-1000"
-                style={{ width: `${ramUsage}%` }}
-              />
-            </div>
-            <div className="flex justify-between items-center text-[9px]">
-              <span className="text-slate-500">Container RAM</span>
-              <span className="text-slate-400 font-mono font-bold">{ramUsage.toFixed(1)}%</span>
-            </div>
+          {/* MrRat.com site link */}
+          <div className="text-center pt-2 border-t border-slate-800/40">
+            <a
+              href="https://www.mrrat.com/"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-[10px] text-slate-500 hover:text-slate-400 transition-colors hover:underline font-semibold"
+            >
+              <span>mrrat.com</span>
+              <span className="text-[8px] text-slate-600">↗</span>
+            </a>
           </div>
         </div>
       </aside>
@@ -572,6 +854,49 @@ export default function App() {
 
           {/* Connection controls */}
           <div className="flex items-center gap-4">
+            {hasPasscode ? (
+              isUnlocked ? (
+                <div className="flex items-center gap-1.5 bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-1 rounded-lg shrink-0">
+                  <button
+                    onClick={() => {
+                      setIsUnlocked(false);
+                      setPasscode('');
+                      sessionStorage.removeItem('admin_passcode');
+                    }}
+                    className="flex items-center gap-1 text-[11px] font-bold text-emerald-400 hover:text-emerald-300 transition-colors cursor-pointer"
+                    title="Lock UI immediately"
+                  >
+                    <Unlock className="w-3.5 h-3.5" />
+                    <span>Admin Mode</span>
+                  </button>
+                  <div className="w-[1px] h-3.5 bg-emerald-500/25" />
+                  <button
+                    onClick={() => setShowSecuritySetupModal(true)}
+                    className="text-[10px] font-semibold text-emerald-500 hover:text-emerald-300 transition-colors cursor-pointer"
+                  >
+                    Set PIN
+                  </button>
+                </div>
+              ) : (
+                <button
+                  onClick={() => setShowUnlockModal(true)}
+                  className="flex items-center gap-1.5 px-2.5 py-1 bg-rose-500/10 hover:bg-rose-500/20 text-rose-400 hover:text-rose-300 border border-rose-500/25 rounded-lg text-[11px] font-bold transition-all cursor-pointer animate-pulse shrink-0"
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                  <span>UI Locked</span>
+                </button>
+              )
+            ) : (
+              <button
+                onClick={() => setShowSecuritySetupModal(true)}
+                className="flex items-center gap-1.5 px-2.5 py-1 bg-slate-800/80 hover:bg-slate-750 text-slate-400 hover:text-slate-200 border border-slate-700/60 rounded-lg text-[11px] font-semibold transition-all cursor-pointer shrink-0"
+                title="Configure UI passcode security"
+              >
+                <Lock className="w-3.5 h-3.5 text-slate-500" />
+                <span>Lock UI</span>
+              </button>
+            )}
+
             {selectedBot && (
               <div className="flex items-center gap-2 bg-slate-900 border border-slate-800/95 p-1 rounded-lg">
                 {selectedBot.status.status === 'running' || selectedBot.status.status === 'starting' ? (
@@ -637,6 +962,8 @@ export default function App() {
               >
                 Create Bot Instance
               </button>
+
+
             </div>
           ) : (
             <>
@@ -877,6 +1204,8 @@ export default function App() {
                       </div>
                     </div>
 
+
+
                     {/* Resource Management Action Box */}
                     <div className="bg-indigo-600/5 border border-indigo-500/10 rounded-2xl p-6 shadow-xl">
                       <div className="flex items-center gap-2 mb-3">
@@ -999,19 +1328,26 @@ export default function App() {
                         </label>
                         <div className="relative">
                           <input
-                            type={showApiKey ? 'text' : 'password'}
-                            value={config.openaiApiKey}
-                            onChange={(e) => handleConfigChange('openaiApiKey', e.target.value)}
-                            placeholder="sk-..."
-                            className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-4 pr-11 py-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-mono"
+                            type={showApiKey && !isCurrentlyLocked ? 'text' : 'password'}
+                            value={isCurrentlyLocked ? '••••••••••••••••' : config.openaiApiKey}
+                            onChange={(e) => {
+                              if (!isCurrentlyLocked) {
+                                handleConfigChange('openaiApiKey', e.target.value);
+                              }
+                            }}
+                            disabled={isCurrentlyLocked}
+                            placeholder={isCurrentlyLocked ? "Protected (UI Locked)" : "sk-..."}
+                            className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-4 pr-11 py-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-mono disabled:opacity-60"
                           />
-                          <button
-                            type="button"
-                            onClick={() => setShowApiKey(!showApiKey)}
-                            className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 cursor-pointer"
-                          >
-                            {showApiKey ? <EyeOff className="w-4.5 h-4.5" /> : <Eye className="w-4.5 h-4.5" />}
-                          </button>
+                          {!isCurrentlyLocked && (
+                            <button
+                              type="button"
+                              onClick={() => setShowApiKey(!showApiKey)}
+                              className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 cursor-pointer"
+                            >
+                              {showApiKey ? <EyeOff className="w-4.5 h-4.5" /> : <Eye className="w-4.5 h-4.5" />}
+                            </button>
+                          )}
                         </div>
                       </div>
 
@@ -1223,19 +1559,26 @@ export default function App() {
                         </label>
                         <div className="relative">
                           <input
-                            type={showToken ? 'text' : 'password'}
-                            value={config.discordToken}
-                            onChange={(e) => handleConfigChange('discordToken', e.target.value)}
-                            placeholder="MTA5ODc2NTQzMjEwOTg3NjU0MzI.GDWabc.XYZ..."
-                            className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-4 pr-11 py-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-mono"
+                            type={showToken && !isCurrentlyLocked ? 'text' : 'password'}
+                            value={isCurrentlyLocked ? '••••••••••••••••' : config.discordToken}
+                            onChange={(e) => {
+                              if (!isCurrentlyLocked) {
+                                handleConfigChange('discordToken', e.target.value);
+                              }
+                            }}
+                            disabled={isCurrentlyLocked}
+                            placeholder={isCurrentlyLocked ? "Protected (UI Locked)" : "MTA5ODc2NTQzMjEwOTg3NjU0MzI.GDWabc.XYZ..."}
+                            className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-4 pr-11 py-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-mono disabled:opacity-60"
                           />
-                          <button
-                            type="button"
-                            onClick={() => setShowToken(!showToken)}
-                            className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 cursor-pointer"
-                          >
-                            {showToken ? <EyeOff className="w-4.5 h-4.5" /> : <Eye className="w-4.5 h-4.5" />}
-                          </button>
+                          {!isCurrentlyLocked && (
+                            <button
+                              type="button"
+                              onClick={() => setShowToken(!showToken)}
+                              className="absolute right-3.5 top-1/2 -translate-y-1/2 text-slate-500 hover:text-slate-300 cursor-pointer"
+                            >
+                              {showToken ? <EyeOff className="w-4.5 h-4.5" /> : <Eye className="w-4.5 h-4.5" />}
+                            </button>
+                          )}
                         </div>
                         <p className="text-xs text-slate-500">
                           Create or view credentials inside the{' '}
@@ -1578,6 +1921,297 @@ export default function App() {
                     className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-indigo-600/10 cursor-pointer"
                   >
                     Create Instance
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* SECURITY UNLOCK MODAL */}
+      <AnimatePresence>
+        {showUnlockModal && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl relative"
+            >
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 bg-rose-500/10 text-rose-400 rounded-xl flex items-center justify-center border border-rose-500/20">
+                  <Lock className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Unlock Admin UI</h3>
+                  <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Authentication Required</p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  UI security is active. Please enter the administrator passcode to unlock configuration modifications, bot startup/shutdown controls, and API tools.
+                </p>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
+                    Admin Passcode
+                  </label>
+                  <input
+                    type="password"
+                    value={inputPasscode}
+                    onChange={(e) => {
+                      setInputPasscode(e.target.value);
+                      if (unlockError) setUnlockError('');
+                    }}
+                    placeholder="••••••••"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-100 placeholder-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-sans"
+                    required
+                    onKeyDown={async (e) => {
+                      if (e.key === 'Enter') {
+                        const success = await handleVerifyUnlock();
+                        if (success) {
+                          setShowUnlockModal(false);
+                          setInputPasscode('');
+                        }
+                      }
+                    }}
+                  />
+                  {unlockError && (
+                    <span className="text-[11px] font-semibold text-rose-400 block mt-1">
+                      ⚠️ {unlockError}
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex gap-3 pt-2 justify-end">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowUnlockModal(false);
+                      setInputPasscode('');
+                      setUnlockError('');
+                    }}
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-750 border border-slate-700/60 rounded-xl text-xs font-bold text-slate-300 transition-all cursor-pointer"
+                  >
+                    Close
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const success = await handleVerifyUnlock();
+                      if (success) {
+                        setShowUnlockModal(false);
+                        setInputPasscode('');
+                      }
+                    }}
+                    disabled={!inputPasscode}
+                    className="px-5 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-rose-600/10 cursor-pointer"
+                  >
+                    Unlock Session
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* SECURITY LOCK VERIFICATION MODAL */}
+      <AnimatePresence>
+        {showLockVerifyModal && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-sm bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl relative"
+            >
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 bg-rose-500/10 text-rose-400 rounded-xl flex items-center justify-center border border-rose-500/20">
+                  <Lock className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">Verify to Lock</h3>
+                  <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Accidental Lockout Protection</p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Please enter your passcode to confirm you still remember it before locking the session. This prevents accidental lockouts from typos during PIN configuration.
+                </p>
+
+                <div className="space-y-1.5">
+                  <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
+                    Confirm Passcode
+                  </label>
+                  <input
+                    type="password"
+                    value={lockVerifyPasscode}
+                    onChange={(e) => {
+                      setLockVerifyPasscode(e.target.value);
+                      if (lockVerifyError) setLockVerifyError('');
+                    }}
+                    placeholder="••••••••"
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-100 placeholder-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-sans"
+                    required
+                    onKeyDown={async (e) => {
+                      if (e.key === 'Enter') {
+                        const success = await handleVerifyAndLock();
+                        if (success) {
+                          setShowLockVerifyModal(false);
+                          setLockVerifyPasscode('');
+                        }
+                      }
+                    }}
+                  />
+                  {lockVerifyError && (
+                    <span className="text-[11px] font-semibold text-rose-400 block mt-1">
+                      ⚠️ {lockVerifyError}
+                    </span>
+                  )}
+                </div>
+
+                <div className="flex gap-3 pt-2 justify-end">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowLockVerifyModal(false);
+                      setLockVerifyPasscode('');
+                      setLockVerifyError('');
+                    }}
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-750 border border-slate-700/60 rounded-xl text-xs font-bold text-slate-300 transition-all cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      const success = await handleVerifyAndLock();
+                      if (success) {
+                        setShowLockVerifyModal(false);
+                        setLockVerifyPasscode('');
+                      }
+                    }}
+                    disabled={!lockVerifyPasscode}
+                    className="px-5 py-2 bg-rose-600 hover:bg-rose-500 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-rose-600/10 cursor-pointer"
+                  >
+                    Lock Session
+                  </button>
+                </div>
+              </div>
+            </motion.div>
+          </div>
+        )}
+      </AnimatePresence>
+
+      {/* SECURITY SETUP MODAL */}
+      <AnimatePresence>
+        {showSecuritySetupModal && (
+          <div className="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <motion.div
+              initial={{ opacity: 0, scale: 0.95 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.95 }}
+              className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 shadow-2xl relative"
+            >
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 bg-indigo-500/10 text-indigo-400 rounded-xl flex items-center justify-center border border-indigo-500/20">
+                  <Lock className="w-5 h-5" />
+                </div>
+                <div>
+                  <h3 className="text-sm font-bold text-white">
+                    {hasPasscode ? 'Manage UI Lock Security' : 'Enable UI Security Lock'}
+                  </h3>
+                  <p className="text-[10px] text-slate-500 uppercase font-bold tracking-wider">Local Instance Controls</p>
+                </div>
+              </div>
+
+              <div className="space-y-4">
+                <p className="text-xs text-slate-400 leading-relaxed">
+                  Define or change an administrator passcode. Once set, local users must authenticate via the passcode to make configuration changes, start/stop instances, or trigger connection tests.
+                </p>
+
+                {setupError && (
+                  <div className="p-3 bg-rose-950/30 border border-rose-900/40 rounded-xl text-rose-300 text-xs">
+                    ⚠️ {setupError}
+                  </div>
+                )}
+
+                {setupSuccess && (
+                  <div className="p-3 bg-emerald-950/30 border border-emerald-900/40 rounded-xl text-emerald-300 text-xs">
+                    ✅ {setupSuccess}
+                  </div>
+                )}
+
+                <div className="space-y-3">
+                  {hasPasscode && (
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
+                        Current Passcode
+                      </label>
+                      <input
+                        type="password"
+                        value={setupCurrentPasscode}
+                        onChange={(e) => setSetupCurrentPasscode(e.target.value)}
+                        placeholder="••••••••"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-100 placeholder-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-sans"
+                      />
+                    </div>
+                  )}
+
+                  <div className="space-y-1.5">
+                    <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
+                      New Passcode {hasPasscode && <span className="text-slate-500 lowercase font-medium">(leave blank to disable lock)</span>}
+                    </label>
+                    <input
+                      type="password"
+                      value={setupNewPasscode}
+                      onChange={(e) => setSetupNewPasscode(e.target.value)}
+                      placeholder="••••••••"
+                      className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-100 placeholder-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-sans"
+                    />
+                  </div>
+
+                  {setupNewPasscode && (
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
+                        Confirm New Passcode
+                      </label>
+                      <input
+                        type="password"
+                        value={setupConfirmPasscode}
+                        onChange={(e) => setSetupConfirmPasscode(e.target.value)}
+                        placeholder="••••••••"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-100 placeholder-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-sans"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                <div className="flex gap-3 pt-2 justify-end">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowSecuritySetupModal(false);
+                      setSetupCurrentPasscode('');
+                      setSetupNewPasscode('');
+                      setSetupConfirmPasscode('');
+                      setSetupError('');
+                      setSetupSuccess('');
+                    }}
+                    className="px-4 py-2 bg-slate-800 hover:bg-slate-750 border border-slate-700/60 rounded-xl text-xs font-bold text-slate-300 transition-all cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleSaveSecuritySetup}
+                    className="px-5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl text-xs font-bold transition-all shadow-lg shadow-indigo-600/10 cursor-pointer"
+                  >
+                    Save Changes
                   </button>
                 </div>
               </div>
