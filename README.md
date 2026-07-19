@@ -1,6 +1,8 @@
 # 🤖 Discord AI Multibot Manager
 A self-hosted web dashboard and management service to deploy, configure, monitor, and auto-start multiple independent AI-powered Discord bots simultaneously. Features real-time log streaming for each bot, individual target LLM settings, system resource metrics, and auto-start recovery using OpenAI or Gemini API compatible backends.
 
+![Discord AI Multibot Manager Dashboard](./assets/screenshot.png)
+
 ---
 
 ## 🛠 Prerequisite: Create Your Discord Bot
