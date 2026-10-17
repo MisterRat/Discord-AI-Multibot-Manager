@@ -79,7 +79,7 @@ services:
     environment:
       - NODE_ENV=production
     # This automatically installs, compiles, and starts the application inside the container
-    command: sh -c "npm install --include=dev && npm run build && npm run start"
+    command: sh -c "npm ci --include=dev && npm run build && npm run start"
 ```
 
 ### Why we use Volumes
@@ -90,6 +90,15 @@ The configuration above mounts your host project directory to `/app` inside the 
 1. Scroll down to the bottom of the stack creation page.
 2. Click **Deploy the stack**.
 3. Wait about 1-2 minutes for Portainer to pull the Node image, install dependencies, compile the application, and start the web dashboard.
+
+### Alternative: build the image with Docker Compose
+If you have the project folder on a machine with Docker (and not just Portainer's web editor), you can build a proper image instead of compiling on every start. From the project folder run:
+
+```bash
+docker compose up -d --build
+```
+
+This uses the `Dockerfile` and the `docker-compose.yml` in this repo. The dashboard is on port `3010`, and settings are stored in `./data/config.json`. If you are switching from the Portainer setup above, move your existing `config.json` into a `data` folder first (`mkdir data && mv config.json data/`) so your bots carry over.
 
 ---
 
@@ -119,8 +128,21 @@ The configuration above mounts your host project directory to `/app` inside the 
    - Use the **Dashboard** and **Terminal Logs** tabs to view live logs, track connection latency, and check active guild/member count.
    - Keep track of total chats, system SLA metrics, and Docker container CPU/RAM allocations directly from the sidebar.
 7. **Secure Your Instance (UI Security Lock)**:
-   - Located at the bottom of the left sidebar is the **UI Lock** status card.
-   - Click **Setup** to set a custom passcode (PIN) to secure administrative actions.
-   - Once set, the dashboard can be locked. When locked, sensitive credentials (like OpenAI API Keys and Discord Bot Tokens) are completely masked, and administrative actions (saving configurations, starting/stopping bots) are restricted.
-   - **Accidental Lockout Protection**: To prevent lockouts from typos during passcode setup, clicking **Lock** will require you to verify your passcode first to confirm you remember it before the dashboard session is secured.
+   - Located at the bottom of the left sidebar is the **UI Lock** status card. Until a passcode is set, anyone who can open the dashboard can control your bots, so set one right away.
+   - Click **Setup** and choose a passcode of at least 6 characters. Unless your browser is on the server itself, you will also be asked for the **one-time setup token**. It is printed in the server log at startup while no passcode is set; in Portainer or Synology Container Manager, open the container's **Logs**. This stops someone else on your network from claiming the dashboard first.
+   - Once a passcode is set, the dashboard, live logs and every bot control require it. A browser stays signed in for 12 hours (or until you click **Lock**, change the passcode, or restart the container).
+   - Saved Discord tokens and API keys are never sent to the browser, locked or not. The fields show that a value is saved; type a new one to replace it. Leaving a field blank keeps the saved value.
+   - Repeated wrong passcodes are slowed down (5 tries per 15 minutes per address).
+   - **Accidental Lockout Protection**: clicking **Lock** asks you to type your passcode first, so a typo during setup can't lock you out.
+   - **Forgot the passcode?** Stop the container, delete the `adminPasscodeHash` line from `config.json`, and start it again. A new setup token will be printed in the log.
 
+8. **Abuse protection in Discord**:
+   - Bot replies can never ping `@everyone`, `@here`, roles or other users, whatever the AI writes.
+   - Each bot has a **Per-User Cooldown** (Triggers & Access tab, default 5 seconds). Messages sent faster than that get a ⏳ reaction instead of an AI reply.
+
+---
+
+## 🔄 Upgrading from 1.1.x
+- Your existing passcode keeps working. It is converted to a secure hash in `config.json` the first time the new version starts.
+- When a passcode is set, the dashboard no longer shows anything until you unlock it.
+- **If your dashboard was ever reachable by other people on your network or the internet, reset your Discord bot tokens and AI API keys.** Earlier versions sent them to any browser that asked, even while locked.

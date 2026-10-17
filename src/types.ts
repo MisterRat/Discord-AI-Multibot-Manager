@@ -13,6 +13,13 @@ export interface BotConfig {
   allowedChannels: string; // Comma separated IDs or empty
   allowedGuilds: string; // Comma separated IDs or empty
   autoStart: boolean;
+  userCooldownSeconds: number; // Minimum seconds between AI replies to the same user (0 = off)
+}
+
+/** Bot config as sent to the browser: secrets blanked, with flags saying whether they are set. */
+export interface PublicBotConfig extends BotConfig {
+  hasDiscordToken: boolean;
+  hasOpenaiApiKey: boolean;
 }
 
 export interface BotStats {
@@ -41,7 +48,7 @@ export interface LogEntry {
 export interface BotInstanceData {
   id: string;
   name: string;
-  config: BotConfig;
+  config: PublicBotConfig;
   status: BotStatus;
   logs: LogEntry[];
 }

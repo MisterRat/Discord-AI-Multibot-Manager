@@ -4,10 +4,10 @@ FROM node:20-alpine AS builder
 WORKDIR /app
 
 # Copy package files first for caching
-COPY package*.json ./
+COPY package.json package-lock.json ./
 RUN npm ci
 
-# Copy the rest of the application files
+# Copy the rest of the application files (see .dockerignore)
 COPY . .
 
 # Run build (vite build + esbuild server bundle)
@@ -19,21 +19,20 @@ FROM node:20-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
-
-# Copy package configuration
-COPY package*.json ./
+# Settings (including bot tokens and API keys) live here; mount a volume on /app/data to keep them.
+ENV CONFIG_PATH=/app/data/config.json
 
 # Install production-only dependencies
-RUN npm ci --only=production
+COPY package.json package-lock.json ./
+RUN npm ci --omit=dev && npm cache clean --force
 
-# Copy built assets and server binary from the builder stage
+# Copy built assets and server bundle from the builder stage
 COPY --from=builder /app/dist ./dist
+COPY config.example.json ./
 
-# Create an empty config.json file so it can be mounted as a file or directory safely if desired
-RUN echo "{}" > config.json
+RUN mkdir -p /app/data
+VOLUME ["/app/data"]
 
-# Expose Port 3000
 EXPOSE 3000
 
-# Start the Node.js production server
-CMD ["npm", "run", "start"]
+CMD ["node", "dist/server.cjs"]
