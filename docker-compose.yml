@@ -1,12 +1,25 @@
-# Builds the image from this folder's Dockerfile.
-# Run from the project folder:  docker compose up -d --build
-# Settings are kept in ./data/config.json on the host.
+# Push-button deploy: in Portainer, add a stack with Build method "Repository",
+# point it at this repo, compose path docker-compose.yml. Portainer clones the
+# repo, builds the image from the Dockerfile and starts it. Settings (bot tokens,
+# API keys, passcode) live in the named volume below and survive redeploys.
 services:
   discord-ai-multibot-manager:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: discord-ai-multibot-manager:latest
     container_name: discord-ai-multibot-manager
     restart: unless-stopped
     ports:
       - "3010:3000"
     volumes:
-      - ./data:/app/data
+      - multibot_data:/app/data
+    environment:
+      - NODE_ENV=production
+      - PORT=3000
+      - CONFIG_PATH=/app/data/config.json
+      # Forgot your passcode? Set RESET_ADMIN_PASSCODE=true in the stack's environment variables and redeploy.
+      - RESET_ADMIN_PASSCODE=${RESET_ADMIN_PASSCODE:-false}
+
+volumes:
+  multibot_data:

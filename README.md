@@ -50,55 +50,36 @@ If you do not do this step, the bot will join your server but will be unable to 
 ---
 
 
-## 🐋 Deploying with Portainer
-Portainer is a powerful UI for managing Docker containers. You can deploy this service easily as a Portainer **Stack** (Docker Compose).
+## 🐋 Deploying with Portainer (from GitHub)
+Portainer can pull this repository, build it and start it for you. No files need to be copied or edited on your server.
 
-### Step 1: Create a New Stack in Portainer
-1. Open your Portainer dashboard.
-2. Navigate to your local environment -> **Stacks** in the left sidebar.
-3. Click the **Add stack** button in the top right.
-4. Name your stack (e.g., `discord-ai-bot`).
+### Step 1: Create the stack
+1. Open Portainer and select your environment (usually **local** or **primary**).
+2. Click **Stacks** in the left sidebar, then **+ Add stack**.
+3. **Name**: `discord-ai-multibot-manager` (lowercase).
+4. **Build method**: choose **Repository**.
+5. **Repository URL**: `https://github.com/MisterRat/Discord-AI-Multibot-Manager`
+6. **Repository reference**: `refs/heads/main`
+7. **Compose path**: `docker-compose.yml`
+8. Click **Deploy the stack**. The first build takes a few minutes.
 
-### Step 2: Paste the Docker Compose Configuration
-In the **Web editor** box, paste the following `docker-compose.yml` configuration:
+### Step 2: Get the one-time setup token
+1. In Portainer, go to **Containers** and click **discord-ai-multibot-manager**.
+2. Click **Logs**. You will see a box containing **One-time setup token: XXXX-XXXX-XXXX**.
+3. Open `http://<your-server-ip>:3010`, click **Setup** under **UI Lock** (bottom left), enter the token and choose your passcode.
 
-```yaml
-version: '3.8'
+### Updating to a new version
+Open the stack in Portainer and click **Pull and redeploy**. Portainer fetches the latest code and rebuilds the image. *(Optional: under **GitOps updates** you can turn on automatic updates.)*
 
-services:
-  discord-ai-multibot-manager:
-    image: node:20-alpine
-    container_name: discord-ai-multibot-manager
-    restart: unless-stopped
-    working_dir: /app
-    ports:
-      - "3010:3000"
-    volumes:
-      # Mount the entire project folder from your host (e.g. Synology NAS volume)
-      - /volume1/docker/discord-ai-multibot-manager:/app
-    environment:
-      - NODE_ENV=production
-    # This automatically installs, compiles, and starts the application inside the container
-    command: sh -c "npm ci --include=dev && npm run build && npm run start"
-```
+### Where your settings are kept
+Bot tokens, API keys, prompts and your passcode are stored in a Docker volume named `discord-ai-multibot-manager_multibot_data` (Portainer → **Volumes**). It is kept when you redeploy or update. Only deleting that volume erases your settings.
 
-### Why we use Volumes
-Without a volume, any settings you change in the web dashboard (like your Discord Token, prompts, and OpenAI/Gemini API Keys) will be wiped out whenever the container reboots or gets updated. 
-The configuration above mounts your host project directory to `/app` inside the container to keep your `config.json` safe.  ⚠️ CRITICAL: all the files from this project need to be in the folder specified under "volumes" in the YAML; i.e. `/volume1/docker/discord-ai-multibot-manager`
-
-### Step 3: Deploy the Stack
-1. Scroll down to the bottom of the stack creation page.
-2. Click **Deploy the stack**.
-3. Wait about 1-2 minutes for Portainer to pull the Node image, install dependencies, compile the application, and start the web dashboard.
-
-### Alternative: build the image with Docker Compose
-If you have the project folder on a machine with Docker (and not just Portainer's web editor), you can build a proper image instead of compiling on every start. From the project folder run:
-
+### Alternative: Docker Compose from the command line
 ```bash
+git clone https://github.com/MisterRat/Discord-AI-Multibot-Manager.git
+cd Discord-AI-Multibot-Manager
 docker compose up -d --build
 ```
-
-This uses the `Dockerfile` and the `docker-compose.yml` in this repo. The dashboard is on port `3010`, and settings are stored in `./data/config.json`. If you are switching from the Portainer setup above, move your existing `config.json` into a `data` folder first (`mkdir data && mv config.json data/`) so your bots carry over.
 
 ---
 
@@ -134,7 +115,7 @@ This uses the `Dockerfile` and the `docker-compose.yml` in this repo. The dashbo
    - Saved Discord tokens and API keys are never sent to the browser, locked or not. The fields show that a value is saved; type a new one to replace it. Leaving a field blank keeps the saved value.
    - Repeated wrong passcodes are slowed down (5 tries per 15 minutes per address).
    - **Accidental Lockout Protection**: clicking **Lock** asks you to type your passcode first, so a typo during setup can't lock you out.
-   - **Forgot the passcode?** Stop the container, delete the `adminPasscodeHash` line from `config.json`, and start it again. A new setup token will be printed in the log.
+   - **Forgot the passcode?** In Portainer, open the stack, add an environment variable `RESET_ADMIN_PASSCODE` = `true`, and click **Update the stack** (or **Pull and redeploy**). The passcode is cleared and a new setup token appears in the container log. Set a new passcode, then remove the variable and update the stack again.
 
 8. **Abuse protection in Discord**:
    - Bot replies can never ping `@everyone`, `@here`, roles or other users, whatever the AI writes.
