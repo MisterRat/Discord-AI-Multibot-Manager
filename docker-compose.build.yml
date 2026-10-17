@@ -1,0 +1,16 @@
+# Same as docker-compose.yml, but builds the image from this folder instead of
+# pulling the published one. Use from the command line:
+#   docker compose -f docker-compose.build.yml up -d --build
+services:
+  discord-ai-multibot-manager:
+    extends:
+      file: docker-compose.yml
+      service: discord-ai-multibot-manager
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: discord-ai-multibot-manager:local
+    pull_policy: build
+
+volumes:
+  multibot_data:
