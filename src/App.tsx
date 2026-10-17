@@ -52,6 +52,7 @@ const DEFAULT_CONFIG: BotConfig = {
   allowedChannels: '',
   allowedGuilds: '',
   autoStart: true,
+  userCooldownSeconds: 5,
 };
 
 export default function App() {
@@ -90,7 +91,7 @@ export default function App() {
 
     try {
       const order = bots.map((b) => b.id);
-      await fetch('/api/bots/reorder', {
+      await apiFetch('/api/bots/reorder', {
         method: 'POST',
         headers: getHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ order }),
@@ -104,10 +105,13 @@ export default function App() {
   const [config, setConfig] = useState<BotConfig>(DEFAULT_CONFIG);
   const [botName, setBotName] = useState<string>('');
 
-  // Security lock states
+  // Security lock states. The session lives in an HttpOnly cookie set by the
+  // server; the browser never stores the passcode itself.
   const [hasPasscode, setHasPasscode] = useState(false);
-  const [isUnlocked, setIsUnlocked] = useState(true);
-  const [passcode, setPasscode] = useState('');
+  const [isUnlocked, setIsUnlocked] = useState(false);
+  const [statusLoaded, setStatusLoaded] = useState(false);
+  const [setupTokenRequired, setSetupTokenRequired] = useState(false);
+  const [minPasscodeLength, setMinPasscodeLength] = useState(6);
   const [showUnlockModal, setShowUnlockModal] = useState(false);
   const [showSecuritySetupModal, setShowSecuritySetupModal] = useState(false);
   
@@ -121,53 +125,50 @@ export default function App() {
   const [setupCurrentPasscode, setSetupCurrentPasscode] = useState('');
   const [setupNewPasscode, setSetupNewPasscode] = useState('');
   const [setupConfirmPasscode, setSetupConfirmPasscode] = useState('');
+  const [setupToken, setSetupToken] = useState('');
   const [setupError, setSetupError] = useState('');
   const [setupSuccess, setSetupSuccess] = useState('');
 
   const isCurrentlyLocked = hasPasscode && !isUnlocked;
 
-  // Fetch initial security status and check session storage
-  useEffect(() => {
-    const fetchSecurityStatus = async () => {
-      try {
-        const res = await fetch('/api/security/status');
-        const data = await res.json();
-        setHasPasscode(data.hasPasscode);
-        
-        const savedCode = sessionStorage.getItem('admin_passcode') || '';
-        if (savedCode && data.hasPasscode) {
-          const verifyRes = await fetch('/api/security/verify', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ passcode: savedCode })
-          });
-          const verifyData = await verifyRes.json();
-          if (verifyData.success) {
-            setPasscode(savedCode);
-            setIsUnlocked(true);
-          } else {
-            sessionStorage.removeItem('admin_passcode');
-            setIsUnlocked(false);
-          }
-        } else if (data.hasPasscode) {
-          setIsUnlocked(false);
-        } else {
-          setIsUnlocked(true);
-        }
-      } catch (err) {
-        console.error('Failed to fetch security status:', err);
+  const refreshSecurityStatus = async () => {
+    try {
+      const res = await fetch('/api/security/status');
+      const data = await res.json();
+      setHasPasscode(!!data.hasPasscode);
+      setIsUnlocked(!!data.authenticated);
+      setSetupTokenRequired(!!data.setupTokenRequired);
+      if (typeof data.minPasscodeLength === 'number') setMinPasscodeLength(data.minPasscodeLength);
+      if (data.hasPasscode && !data.authenticated) {
+        setBots([]);
+        setShowUnlockModal(true);
       }
-    };
-    fetchSecurityStatus();
+    } catch (err) {
+      console.error('Failed to fetch security status:', err);
+    } finally {
+      setStatusLoaded(true);
+    }
+  };
+
+  // Fetch initial security status
+  useEffect(() => {
+    // Older versions kept the plain-text passcode in sessionStorage; remove it.
+    try {
+      sessionStorage.removeItem('admin_passcode');
+    } catch {}
+    refreshSecurityStatus();
   }, []);
 
-  const getHeaders = (extraHeaders: Record<string, string> = {}) => {
-    const headers: Record<string, string> = { ...extraHeaders };
-    if (passcode) {
-      headers['X-Admin-Passcode'] = passcode;
+  // Wrapper for protected API calls: a 401 means the session ended, so re-check and show the lock.
+  const apiFetch = async (url: string, init: RequestInit = {}) => {
+    const res = await fetch(url, { credentials: 'same-origin', ...init });
+    if (res.status === 401) {
+      refreshSecurityStatus();
     }
-    return headers;
+    return res;
   };
+
+  const getHeaders = (extraHeaders: Record<string, string> = {}) => ({ ...extraHeaders });
 
   const checkActionPermission = (): boolean => {
     if (hasPasscode && !isUnlocked) {
@@ -177,25 +178,36 @@ export default function App() {
     return true;
   };
 
+  const loginWithPasscode = async (code: string): Promise<{ ok: boolean; error?: string }> => {
+    const res = await fetch('/api/security/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ passcode: code }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (res.ok && data.success) return { ok: true };
+    return { ok: false, error: data.error || 'Invalid passcode. Access denied.' };
+  };
+
+  const lockNow = async () => {
+    try {
+      await fetch('/api/security/logout', { method: 'POST' });
+    } catch {}
+    setIsUnlocked(false);
+    setBots([]);
+  };
+
   const handleVerifyUnlock = async (): Promise<boolean> => {
     if (!inputPasscode) return false;
     try {
-      const res = await fetch('/api/security/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ passcode: inputPasscode }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setPasscode(inputPasscode);
+      const result = await loginWithPasscode(inputPasscode);
+      if (result.ok) {
         setIsUnlocked(true);
-        sessionStorage.setItem('admin_passcode', inputPasscode);
         setUnlockError('');
         return true;
-      } else {
-        setUnlockError('Invalid passcode. Access denied.');
-        return false;
       }
+      setUnlockError(result.error || 'Invalid passcode. Access denied.');
+      return false;
     } catch (err: any) {
       setUnlockError(err.message || 'Verification failed due to a network error.');
       return false;
@@ -205,22 +217,18 @@ export default function App() {
   const handleVerifyAndLock = async (): Promise<boolean> => {
     if (!lockVerifyPasscode) return false;
     try {
-      const res = await fetch('/api/security/verify', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ passcode: lockVerifyPasscode }),
-      });
-      const data = await res.json();
-      if (data.success) {
-        setIsUnlocked(false);
-        setPasscode('');
-        sessionStorage.removeItem('admin_passcode');
+      const result = await loginWithPasscode(lockVerifyPasscode);
+      if (result.ok) {
+        await lockNow();
         setLockVerifyError('');
         return true;
-      } else {
-        setLockVerifyError('Invalid passcode. You must verify your correct passcode before locking.');
-        return false;
       }
+      setLockVerifyError(
+        result.error && !result.error.startsWith('Invalid passcode')
+          ? result.error
+          : 'Invalid passcode. You must verify your correct passcode before locking.'
+      );
+      return false;
     } catch (err: any) {
       setLockVerifyError(err.message || 'Verification failed due to a network error.');
       return false;
@@ -232,6 +240,14 @@ export default function App() {
       setSetupError('New passcodes do not match.');
       return;
     }
+    if (setupNewPasscode && setupNewPasscode.length < minPasscodeLength) {
+      setSetupError(`Passcode must be at least ${minPasscodeLength} characters.`);
+      return;
+    }
+    if (!hasPasscode && !setupNewPasscode) {
+      setSetupError('Enter a new passcode.');
+      return;
+    }
 
     try {
       const res = await fetch('/api/security/setup', {
@@ -240,10 +256,11 @@ export default function App() {
         body: JSON.stringify({
           passcode: setupNewPasscode,
           currentPasscode: setupCurrentPasscode,
+          setupToken,
         }),
       });
       
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       
       if (res.ok) {
         setSetupSuccess(setupNewPasscode ? 'Admin passcode configured successfully!' : 'Admin passcode disabled successfully.');
@@ -253,19 +270,12 @@ export default function App() {
         setSetupCurrentPasscode('');
         setSetupNewPasscode('');
         setSetupConfirmPasscode('');
+        setSetupToken('');
         
-        // Update local state
-        const hasCode = !!setupNewPasscode;
-        setHasPasscode(hasCode);
-        if (hasCode) {
-          setPasscode(setupNewPasscode);
-          setIsUnlocked(true);
-          sessionStorage.setItem('admin_passcode', setupNewPasscode);
-        } else {
-          setPasscode('');
-          setIsUnlocked(true);
-          sessionStorage.removeItem('admin_passcode');
-        }
+        // The server has set (or cleared) our session cookie.
+        setHasPasscode(!!setupNewPasscode);
+        setIsUnlocked(true);
+        refreshSecurityStatus();
         
         setTimeout(() => {
           setShowSecuritySetupModal(false);
@@ -288,6 +298,7 @@ export default function App() {
   // UI status helpers
   const [showToken, setShowToken] = useState(false);
   const [showApiKey, setShowApiKey] = useState(false);
+  const [clearApiKey, setClearApiKey] = useState(false);
   const [saveStatus, setSaveStatus] = useState<'idle' | 'saving' | 'saved' | 'error'>('idle');
   const [controlLoading, setControlLoading] = useState(false);
   
@@ -326,8 +337,10 @@ export default function App() {
     return () => clearInterval(timer);
   }, []);
 
-  // Set up SSE Event Stream
+  // Set up SSE Event Stream (only once we know we're allowed to see it)
+  const canView = statusLoaded && (!hasPasscode || isUnlocked);
   useEffect(() => {
+    if (!canView) return;
     const eventSource = new EventSource('/api/logs/stream');
 
     eventSource.onmessage = (event) => {
@@ -352,6 +365,9 @@ export default function App() {
               b.id === payload.botId ? { ...b, status: payload.data } : b
             )
           );
+        } else if (payload.type === 'auth') {
+          eventSource.close();
+          refreshSecurityStatus();
         } else if (payload.type === 'bots') {
           setBots(payload.data);
           if (payload.data.length > 0) {
@@ -369,13 +385,18 @@ export default function App() {
     };
 
     eventSource.onerror = (err) => {
-      console.warn('Log stream connection lost. Auto-reconnecting...', err);
+      if (eventSource.readyState === EventSource.CLOSED) {
+        // The server refused the stream (e.g. session ended); re-check the lock state.
+        refreshSecurityStatus();
+      } else {
+        console.warn('Log stream connection lost. Auto-reconnecting...', err);
+      }
     };
 
     return () => {
       eventSource.close();
     };
-  }, []);
+  }, [canView]);
 
   // Determine active bot selection
   const selectedBot = bots.find((b) => b.id === selectedBotId) || bots[0];
@@ -383,9 +404,11 @@ export default function App() {
   // Update local forms when selection shifts
   useEffect(() => {
     if (selectedBot) {
-      setConfig({ ...DEFAULT_CONFIG, ...selectedBot.config });
+      setConfig({ ...DEFAULT_CONFIG, ...selectedBot.config, discordToken: '', openaiApiKey: '' });
       setBotName(selectedBot.name);
       setTestResult(null);
+      setClearApiKey(false);
+      setModelsList([]);
     }
   }, [selectedBotId, selectedBot?.id]);
 
@@ -396,12 +419,15 @@ export default function App() {
     }
   }, [selectedBot?.logs]);
 
+  // A key typed into the form, or one already saved on the server for this bot
+  const hasUsableApiKey = !!config.openaiApiKey || (!clearApiKey && !!selectedBot?.config.hasOpenaiApiKey);
+
   // Fetch available models on tab open
   useEffect(() => {
-    if (activeTab === 'ai_settings' && config.openaiBaseUrl && config.openaiApiKey && modelsList.length === 0) {
+    if (activeTab === 'ai_settings' && config.openaiBaseUrl && hasUsableApiKey && modelsList.length === 0) {
       handleFetchModels();
     }
-  }, [activeTab, selectedBotId, config.openaiBaseUrl, config.openaiApiKey, modelsList.length]);
+  }, [activeTab, selectedBotId, config.openaiBaseUrl, hasUsableApiKey, modelsList.length]);
 
   const handleConfigChange = <K extends keyof BotConfig>(key: K, value: BotConfig[K]) => {
     setConfig((prev) => ({ ...prev, [key]: value }));
@@ -415,15 +441,26 @@ export default function App() {
 
     setSaveStatus('saving');
     try {
-      const res = await fetch(`/api/bots/${selectedBot.id}`, {
+      // Secrets are only sent when typed: blank keeps the saved value, null removes it.
+      const { discordToken, openaiApiKey, ...rest } = config;
+      const payload: Record<string, unknown> = { ...rest };
+      delete payload.hasDiscordToken;
+      delete payload.hasOpenaiApiKey;
+      if (discordToken.trim()) payload.discordToken = discordToken.trim();
+      if (openaiApiKey.trim()) payload.openaiApiKey = openaiApiKey.trim();
+      else if (clearApiKey) payload.openaiApiKey = null;
+
+      const res = await apiFetch(`/api/bots/${selectedBot.id}`, {
         method: 'PUT',
         headers: getHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           name: botName,
-          config,
+          config: payload,
         }),
       });
       if (res.ok) {
+        setConfig((prev) => ({ ...prev, discordToken: '', openaiApiKey: '' }));
+        setClearApiKey(false);
         setSaveStatus('saved');
         setTimeout(() => setSaveStatus('idle'), 3000);
         return true;
@@ -452,7 +489,7 @@ export default function App() {
         setControlLoading(false);
         return;
       }
-      const res = await fetch(`/api/bots/${selectedBot.id}/start`, {
+      const res = await apiFetch(`/api/bots/${selectedBot.id}/start`, {
         method: 'POST',
         headers: getHeaders(),
       });
@@ -472,7 +509,7 @@ export default function App() {
 
     setControlLoading(true);
     try {
-      const res = await fetch(`/api/bots/${selectedBot.id}/stop`, {
+      const res = await apiFetch(`/api/bots/${selectedBot.id}/stop`, {
         method: 'POST',
         headers: getHeaders(),
       });
@@ -489,7 +526,7 @@ export default function App() {
     if (!checkActionPermission()) return;
 
     try {
-      const res = await fetch('/api/bots', {
+      const res = await apiFetch('/api/bots', {
         method: 'POST',
         headers: getHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({ name: newBotName.trim() }),
@@ -511,7 +548,7 @@ export default function App() {
     if (!confirm(`Are you absolutely sure you want to delete "${selectedBot.name}"?`)) return;
 
     try {
-      const res = await fetch(`/api/bots/${selectedBot.id}`, {
+      const res = await apiFetch(`/api/bots/${selectedBot.id}`, {
         method: 'DELETE',
         headers: getHeaders(),
       });
@@ -528,13 +565,14 @@ export default function App() {
     setTesting(true);
     setTestResult(null);
     try {
-      const res = await fetch('/api/test-openai', {
+      const res = await apiFetch('/api/test-openai', {
         method: 'POST',
         headers: getHeaders({ 'Content-Type': 'application/json' }),
         body: JSON.stringify({
           url: config.openaiBaseUrl,
           apiKey: config.openaiApiKey,
           model: config.modelName,
+          botId: clearApiKey ? undefined : selectedBot?.id,
         }),
       });
       const data = await res.json();
@@ -547,16 +585,17 @@ export default function App() {
   };
 
   const handleFetchModels = async () => {
-    if (!config.openaiBaseUrl || !config.openaiApiKey) return;
+    if (!config.openaiBaseUrl || !hasUsableApiKey) return;
     setFetchingModels(true);
     setModelsError(null);
     try {
-      const res = await fetch('/api/models', {
+      const res = await apiFetch('/api/models', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           url: config.openaiBaseUrl,
           apiKey: config.openaiApiKey,
+          botId: clearApiKey ? undefined : selectedBot?.id,
         }),
       });
       const data = await res.json();
@@ -919,9 +958,7 @@ export default function App() {
                 <div className="flex items-center gap-1.5 bg-emerald-500/10 border border-emerald-500/30 px-2.5 py-1 rounded-lg shrink-0">
                   <button
                     onClick={() => {
-                      setIsUnlocked(false);
-                      setPasscode('');
-                      sessionStorage.removeItem('admin_passcode');
+                      lockNow();
                     }}
                     className="flex items-center gap-1 text-[11px] font-bold text-emerald-400 hover:text-emerald-300 transition-colors cursor-pointer"
                     title="Lock UI immediately"
@@ -1296,7 +1333,7 @@ export default function App() {
                           type="button"
                           onClick={() => {
                             if (confirm('Clear conversational history caches for this bot instance?')) {
-                              fetch(`/api/bots/${selectedBot.id}/clear-history`, {
+                              apiFetch(`/api/bots/${selectedBot.id}/clear-history`, {
                                 method: 'POST',
                                 headers: { 'Content-Type': 'application/json' },
                                 body: JSON.stringify({ channelId: '' }),
@@ -1389,14 +1426,22 @@ export default function App() {
                         <div className="relative">
                           <input
                             type={showApiKey && !isCurrentlyLocked ? 'text' : 'password'}
-                            value={isCurrentlyLocked ? '••••••••••••••••' : config.openaiApiKey}
+                            value={isCurrentlyLocked ? '' : config.openaiApiKey}
                             onChange={(e) => {
                               if (!isCurrentlyLocked) {
                                 handleConfigChange('openaiApiKey', e.target.value);
+                                if (e.target.value) setClearApiKey(false);
                               }
                             }}
                             disabled={isCurrentlyLocked}
-                            placeholder={isCurrentlyLocked ? "Protected (UI Locked)" : "sk-..."}
+                            autoComplete="off"
+                            placeholder={
+                              isCurrentlyLocked
+                                ? 'Protected (UI Locked)'
+                                : selectedBot?.config.hasOpenaiApiKey && !clearApiKey
+                                ? 'Saved (hidden). Type to replace.'
+                                : 'sk-...'
+                            }
                             className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-4 pr-11 py-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-mono disabled:opacity-60"
                           />
                           {!isCurrentlyLocked && (
@@ -1409,6 +1454,32 @@ export default function App() {
                             </button>
                           )}
                         </div>
+                        {selectedBot?.config.hasOpenaiApiKey && !isCurrentlyLocked && !config.openaiApiKey && (
+                          <p className="text-xs text-slate-500">
+                            {clearApiKey ? (
+                              <>
+                                The saved key will be removed when you save.{' '}
+                                <button type="button" onClick={() => setClearApiKey(false)} className="text-indigo-400 hover:underline font-bold cursor-pointer">
+                                  Keep it
+                                </button>
+                              </>
+                            ) : (
+                              <>
+                                A key is saved for this bot and stays on the server.{' '}
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setClearApiKey(true);
+                                    if (saveStatus !== 'idle') setSaveStatus('idle');
+                                  }}
+                                  className="text-rose-400 hover:underline font-bold cursor-pointer"
+                                >
+                                  Remove saved key
+                                </button>
+                              </>
+                            )}
+                          </p>
+                        )}
                       </div>
 
                       <div className="space-y-2">
@@ -1620,14 +1691,21 @@ export default function App() {
                         <div className="relative">
                           <input
                             type={showToken && !isCurrentlyLocked ? 'text' : 'password'}
-                            value={isCurrentlyLocked ? '••••••••••••••••' : config.discordToken}
+                            value={isCurrentlyLocked ? '' : config.discordToken}
                             onChange={(e) => {
                               if (!isCurrentlyLocked) {
                                 handleConfigChange('discordToken', e.target.value);
                               }
                             }}
                             disabled={isCurrentlyLocked}
-                            placeholder={isCurrentlyLocked ? "Protected (UI Locked)" : "MTA5ODc2NTQzMjEwOTg3NjU0MzI.GDWabc.XYZ..."}
+                            autoComplete="off"
+                            placeholder={
+                              isCurrentlyLocked
+                                ? 'Protected (UI Locked)'
+                                : selectedBot?.config.hasDiscordToken
+                                ? 'Saved (hidden). Paste a new token to replace.'
+                                : 'MTA5ODc2NTQzMjEwOTg3NjU0MzI.GDWabc.XYZ...'
+                            }
                             className="w-full bg-slate-900 border border-slate-800 rounded-xl pl-4 pr-11 py-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-mono disabled:opacity-60"
                           />
                           {!isCurrentlyLocked && (
@@ -1825,6 +1903,24 @@ export default function App() {
                           Comma-separated list. Leave blank to allow responses in all public server channels.
                         </p>
                       </div>
+
+                      <div className="space-y-2">
+                        <label className="text-xs font-bold text-slate-400 uppercase tracking-wider">
+                          Per-User Cooldown (seconds)
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          max={3600}
+                          step={1}
+                          value={config.userCooldownSeconds}
+                          onChange={(e) => handleConfigChange('userCooldownSeconds', Math.max(0, Number(e.target.value) || 0))}
+                          className="w-full bg-slate-900 border border-slate-800 rounded-xl px-4 py-3 text-sm text-slate-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 transition-all font-mono"
+                        />
+                        <p className="text-xs text-slate-500">
+                          Minimum time between AI replies to the same person. Messages sent sooner get a ⏳ reaction. 0 turns it off.
+                        </p>
+                      </div>
                     </div>
                   </div>
 
@@ -2011,7 +2107,7 @@ export default function App() {
 
               <div className="space-y-4">
                 <p className="text-xs text-slate-400 leading-relaxed">
-                  UI security is active. Please enter the administrator passcode to unlock configuration modifications, bot startup/shutdown controls, and API tools.
+                  This dashboard is locked. Enter the administrator passcode to view and manage your bots.
                 </p>
 
                 <div className="space-y-1.5">
@@ -2191,7 +2287,7 @@ export default function App() {
 
               <div className="space-y-4">
                 <p className="text-xs text-slate-400 leading-relaxed">
-                  Define or change an administrator passcode. Once set, local users must authenticate via the passcode to make configuration changes, start/stop instances, or trigger connection tests.
+                  Define or change an administrator passcode. Once set, the dashboard, logs and all bot controls require the passcode. Saved tokens and API keys are never sent to the browser.
                 </p>
 
                 {setupError && (
@@ -2207,6 +2303,25 @@ export default function App() {
                 )}
 
                 <div className="space-y-3">
+                  {!hasPasscode && setupTokenRequired && (
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
+                        Setup Token
+                      </label>
+                      <input
+                        type="text"
+                        value={setupToken}
+                        onChange={(e) => setSetupToken(e.target.value)}
+                        placeholder="XXXX-XXXX-XXXX"
+                        autoComplete="off"
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2.5 text-xs text-slate-100 placeholder-slate-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono uppercase"
+                      />
+                      <p className="text-[11px] text-slate-500">
+                        Printed in the server log when no passcode is set (in Docker: the container's log). This proves you control the server.
+                      </p>
+                    </div>
+                  )}
+
                   {hasPasscode && (
                     <div className="space-y-1.5">
                       <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
@@ -2224,7 +2339,10 @@ export default function App() {
 
                   <div className="space-y-1.5">
                     <label className="text-xs font-bold text-slate-400 uppercase tracking-wider block">
-                      New Passcode {hasPasscode && <span className="text-slate-500 lowercase font-medium">(leave blank to disable lock)</span>}
+                      New Passcode{' '}
+                      <span className="text-slate-500 lowercase font-medium">
+                        (at least {minPasscodeLength} characters{hasPasscode ? '; leave blank to disable lock' : ''})
+                      </span>
                     </label>
                     <input
                       type="password"
@@ -2259,6 +2377,7 @@ export default function App() {
                       setSetupCurrentPasscode('');
                       setSetupNewPasscode('');
                       setSetupConfirmPasscode('');
+                      setSetupToken('');
                       setSetupError('');
                       setSetupSuccess('');
                     }}

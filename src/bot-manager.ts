@@ -3,25 +3,14 @@ import OpenAI from 'openai';
 import * as fs from 'fs';
 import * as path from 'path';
 import { BotConfig, BotStatus, LogEntry, BotStats, BotInstanceData } from './types';
+import { DEFAULT_CONFIG, applyConfigPatch, toPublicConfig } from './config';
+import { hashPasscode, verifyPasscodeHash, MIN_PASSCODE_LENGTH } from './auth';
+import { chunkText, UserCooldown, NO_MENTIONS, REPLY_NO_MENTIONS } from './discord-utils';
 
-const CONFIG_PATH = path.join(process.cwd(), 'config.json');
-
-const DEFAULT_CONFIG: BotConfig = {
-  discordToken: '',
-  openaiBaseUrl: 'https://api.openai.com/v1',
-  openaiApiKey: '',
-  modelName: 'gpt-4o-mini',
-  systemPrompt: 'You are a helpful and friendly Discord AI assistant.',
-  temperature: 0.7,
-  maxTokens: 512,
-  respondToMentions: true,
-  respondToPrefix: false,
-  prefix: '!',
-  respondToDMs: true,
-  allowedChannels: '',
-  allowedGuilds: '',
-  autoStart: true,
-};
+// Where settings (including bot tokens and API keys) are stored. Override with
+// the CONFIG_PATH environment variable, e.g. to keep it on a Docker volume.
+const CONFIG_PATH = path.resolve(process.env.CONFIG_PATH || path.join(process.cwd(), 'config.json'));
+const EXAMPLE_CONFIG_PATH = path.join(process.cwd(), 'config.example.json');
 
 export class SingleBotRunner {
   public id: string;
@@ -41,6 +30,7 @@ export class SingleBotRunner {
   private startTime: number | null = null;
   private conversationHistory = new Map<string, Array<{ role: 'user' | 'assistant' | 'system'; content: string }>>();
   private uptimeInterval: NodeJS.Timeout | null = null;
+  private cooldown = new UserCooldown();
 
   constructor(
     id: string,
@@ -285,8 +275,18 @@ export class SingleBotRunner {
       // Handle simple clean trigger
       if (textToProcess.toLowerCase() === 'clear') {
         this.conversationHistory.delete(channelId);
-        await message.reply('🧹 Conversation history has been cleared for this channel.');
+        await message
+          .reply({ content: '🧹 Conversation history has been cleared for this channel.', allowedMentions: REPLY_NO_MENTIONS })
+          .catch(() => {});
         this.addLog('info', `Cleared history in Discord channel ${channelId} by user ${message.author.tag}`);
+        return;
+      }
+
+      // Per-user rate limit so one person can't run up the AI bill or flood a channel.
+      const userId = message.author.id;
+      if (!this.cooldown.tryAcquire(userId, this.config.userCooldownSeconds ?? DEFAULT_CONFIG.userCooldownSeconds)) {
+        this.addLog('warn', `Ignored message from @${message.author.username}: still on cooldown`);
+        await message.react('⏳').catch(() => {});
         return;
       }
 
@@ -307,17 +307,17 @@ export class SingleBotRunner {
         // safe ignore
       }
 
+      if (!this.conversationHistory.has(channelId)) {
+        this.conversationHistory.set(channelId, []);
+      }
+      const history = this.conversationHistory.get(channelId)!;
+      const userTurn = { role: 'user' as const, content: textToProcess };
+      history.push(userTurn);
+      if (history.length > 15) {
+        history.shift();
+      }
+
       try {
-        if (!this.conversationHistory.has(channelId)) {
-          this.conversationHistory.set(channelId, []);
-        }
-        const history = this.conversationHistory.get(channelId)!;
-
-        history.push({ role: 'user', content: textToProcess });
-        if (history.length > 15) {
-          history.shift();
-        }
-
         const aiResponse = await this.generateAIResponse(history);
 
         history.push({ role: 'assistant', content: aiResponse });
@@ -326,23 +326,34 @@ export class SingleBotRunner {
         }
 
         if (typingInterval) clearInterval(typingInterval);
+        typingInterval = null;
 
-        const chunks = this.chunkText(aiResponse, 1950);
+        // AI output must never be able to ping @everyone, @here, roles or users.
+        const chunks = chunkText(aiResponse, 1950);
         for (let i = 0; i < chunks.length; i++) {
           if (i === 0) {
-            await message.reply(chunks[i]);
+            await message.reply({ content: chunks[i], allowedMentions: REPLY_NO_MENTIONS });
           } else {
-            await message.channel.send(chunks[i]);
+            await message.channel.send({ content: chunks[i], allowedMentions: NO_MENTIONS });
           }
         }
 
         this.stats.chatsProcessed++;
         this.addLog('success', `Sent AI response to @${message.author.username}`);
       } catch (err: any) {
-        if (typingInterval) clearInterval(typingInterval);
+        // Drop the unanswered user turn so the next request doesn't carry it twice.
+        const idx = history.lastIndexOf(userTurn);
+        if (idx !== -1) history.splice(idx, 1);
+
         this.stats.errorCount++;
         this.addLog('error', `Failed to generate AI chat response: ${err.message}`);
-        await message.reply(`⚠️ Sorry, I ran into an error processing that: \`${err.message}\``).catch(() => {});
+        // Full details stay in the dashboard log; the channel gets a generic message.
+        await message
+          .reply({ content: '⚠️ Sorry, I ran into an error processing that. Please try again later.', allowedMentions: REPLY_NO_MENTIONS })
+          .catch(() => {});
+      } finally {
+        if (typingInterval) clearInterval(typingInterval);
+        this.cooldown.release(userId);
       }
     });
   }
@@ -467,28 +478,14 @@ export class SingleBotRunner {
       throw new Error(`AI generation failed: ${errorMsg}`);
     }
   }
-
-  private chunkText(text: string, limit: number): string[] {
-    const chunks: string[] = [];
-    let current = '';
-
-    const lines = text.split('\n');
-    for (const line of lines) {
-      if ((current + '\n' + line).length > limit) {
-        if (current) chunks.push(current);
-        current = line;
-      } else {
-        current = current ? current + '\n' + line : line;
-      }
-    }
-    if (current) chunks.push(current);
-    return chunks;
-  }
 }
+
+export type SetPasscodeResult = { ok: boolean; reason?: 'wrong-current' | 'too-short' };
 
 class BotManager {
   private runners = new Map<string, SingleBotRunner>();
-  private adminPasscode = '';
+  // scrypt hash of the admin passcode ('' = no passcode set). Never stored in plain text.
+  private adminPasscodeHash = '';
   private logSubscribers = new Set<(payload: { botId: string; log: LogEntry }) => void>();
   private statusSubscribers = new Set<(payload: { botId: string; status: BotStatus }) => void>();
   private globalSubscribers = new Set<() => void>();
@@ -498,21 +495,30 @@ class BotManager {
   }
 
   public getHasPasscode(): boolean {
-    return !!this.adminPasscode;
+    return !!this.adminPasscodeHash;
   }
 
-  public verifyPasscode(code: string): boolean {
-    if (!this.adminPasscode) return true;
-    return this.adminPasscode === code;
+  /** Checks a passcode against the stored hash. Returns false when no passcode is set. */
+  public verifyPasscode(code: unknown): boolean {
+    if (!this.adminPasscodeHash) return false;
+    return verifyPasscodeHash(code, this.adminPasscodeHash);
   }
 
-  public setPasscode(newCode: string, currentCode: string): boolean {
-    if (this.adminPasscode && this.adminPasscode !== currentCode) {
-      return false;
+  /**
+   * Set, change or clear (newCode = '') the admin passcode. When one is already
+   * set, the current passcode must be supplied. Callers are responsible for
+   * deciding who may set the *first* passcode.
+   */
+  public setPasscode(newCode: string, currentCode: string): SetPasscodeResult {
+    if (this.adminPasscodeHash && !this.verifyPasscode(currentCode)) {
+      return { ok: false, reason: 'wrong-current' };
     }
-    this.adminPasscode = newCode;
+    if (newCode && newCode.length < MIN_PASSCODE_LENGTH) {
+      return { ok: false, reason: 'too-short' };
+    }
+    this.adminPasscodeHash = newCode ? hashPasscode(newCode) : '';
     this.saveConfigDisk();
-    return true;
+    return { ok: true };
   }
 
   public getBots(): SingleBotRunner[] {
@@ -527,15 +533,15 @@ class BotManager {
     return this.getBots().map((runner) => ({
       id: runner.id,
       name: runner.name,
-      config: runner.config,
+      config: toPublicConfig(runner.config),
       status: runner.getStatus(),
       logs: runner.getLogs(),
     }));
   }
 
-  public createBot(name: string, config: Partial<BotConfig> = {}): SingleBotRunner {
+  public createBot(name: string, config: unknown = {}): SingleBotRunner {
     const id = 'bot_' + Math.random().toString(36).substring(2, 9);
-    const newConfig = { ...DEFAULT_CONFIG, ...config };
+    const newConfig = applyConfigPatch(DEFAULT_CONFIG, config);
     const runner = new SingleBotRunner(id, name, newConfig, this.handleRunnerUpdate.bind(this));
     this.runners.set(id, runner);
     this.saveConfigDisk();
@@ -544,12 +550,12 @@ class BotManager {
     return runner;
   }
 
-  public updateBot(id: string, name: string, newConfig: Partial<BotConfig>): boolean {
+  public updateBot(id: string, name: unknown, newConfig: unknown): boolean {
     const runner = this.runners.get(id);
     if (!runner) return false;
 
-    runner.name = name;
-    runner.config = { ...runner.config, ...newConfig };
+    if (typeof name === 'string' && name.trim()) runner.name = name.trim();
+    runner.config = applyConfigPatch(runner.config, newConfig);
     this.saveConfigDisk();
     runner.addLog('success', `Configuration updated.`);
     this.broadcastGlobal();
@@ -619,14 +625,24 @@ class BotManager {
   private saveConfigDisk() {
     try {
       const exportData = {
-        adminPasscode: this.adminPasscode,
+        adminPasscodeHash: this.adminPasscodeHash,
         bots: this.getBots().map((runner) => ({
           id: runner.id,
           name: runner.name,
           config: runner.config,
         })),
       };
-      fs.writeFileSync(CONFIG_PATH, JSON.stringify(exportData, null, 2), 'utf-8');
+      fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+      // Write-then-rename so a crash mid-write can't leave a truncated config behind.
+      const tmpPath = CONFIG_PATH + '.tmp';
+      fs.writeFileSync(tmpPath, JSON.stringify(exportData, null, 2), { encoding: 'utf-8', mode: 0o600 });
+      try {
+        fs.renameSync(tmpPath, CONFIG_PATH);
+      } catch {
+        // Renaming over a single-file bind mount fails on some Docker setups; fall back to an in-place write.
+        fs.writeFileSync(CONFIG_PATH, JSON.stringify(exportData, null, 2), 'utf-8');
+        fs.rmSync(tmpPath, { force: true });
+      }
     } catch (err: any) {
       console.error(`Failed to save config.json: ${err.message}`);
     }
@@ -634,25 +650,30 @@ class BotManager {
 
   private loadConfig() {
     try {
-      if (!fs.existsSync(CONFIG_PATH)) {
-        const examplePath = path.join(process.cwd(), 'config.example.json');
-        if (fs.existsSync(examplePath)) {
-          fs.copyFileSync(examplePath, CONFIG_PATH);
-        }
+      if (!fs.existsSync(CONFIG_PATH) && fs.existsSync(EXAMPLE_CONFIG_PATH)) {
+        fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+        fs.copyFileSync(EXAMPLE_CONFIG_PATH, CONFIG_PATH);
       }
       if (fs.existsSync(CONFIG_PATH)) {
         const content = fs.readFileSync(CONFIG_PATH, 'utf-8');
         const parsed = JSON.parse(content);
 
+        let migratePasscode = false;
         if (parsed && typeof parsed === 'object') {
-          this.adminPasscode = parsed.adminPasscode || '';
+          if (typeof parsed.adminPasscodeHash === 'string') {
+            this.adminPasscodeHash = parsed.adminPasscodeHash;
+          } else if (typeof parsed.adminPasscode === 'string' && parsed.adminPasscode) {
+            // Older versions stored the passcode in plain text; hash it and rewrite the file.
+            this.adminPasscodeHash = hashPasscode(parsed.adminPasscode);
+            migratePasscode = true;
+          }
         }
 
         // Check format: old vs new
         if (parsed && Array.isArray(parsed.bots)) {
           // New list format
           for (const botData of parsed.bots) {
-            const config = { ...DEFAULT_CONFIG, ...botData.config };
+            const config = applyConfigPatch(DEFAULT_CONFIG, botData.config);
             const runner = new SingleBotRunner(
               botData.id,
               botData.name || 'Discord AI Bot',
@@ -661,9 +682,10 @@ class BotManager {
             );
             this.runners.set(botData.id, runner);
           }
+          if (migratePasscode) this.saveConfigDisk();
         } else if (parsed && typeof parsed === 'object' && parsed.discordToken !== undefined) {
           // Old single format migration
-          const config = { ...DEFAULT_CONFIG, ...parsed };
+          const config = applyConfigPatch(DEFAULT_CONFIG, parsed);
           const runner = new SingleBotRunner(
             'default',
             'Primary Bot',
@@ -706,6 +728,17 @@ class BotManager {
         });
       }
     });
+  }
+
+  /**
+   * The dashboard never receives stored API keys, so when it asks to test a
+   * connection or list models without typing a key, fall back to the key saved
+   * for that bot.
+   */
+  public resolveApiKey(providedKey: unknown, botId: unknown): string {
+    if (typeof providedKey === 'string' && providedKey.trim()) return providedKey.trim();
+    if (typeof botId === 'string') return this.runners.get(botId)?.config.openaiApiKey || '';
+    return '';
   }
 
   // Generic helpers

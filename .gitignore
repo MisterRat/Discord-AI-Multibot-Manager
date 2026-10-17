@@ -7,3 +7,5 @@ coverage/
 .env*
 !.env.example
 config.json
+data/
+config.json.tmp
