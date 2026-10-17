@@ -51,7 +51,7 @@ If you do not do this step, the bot will join your server but will be unable to 
 
 
 ## 🐋 Deploying with Portainer (from GitHub)
-Portainer can pull this repository, build it and start it for you. No files need to be copied or edited on your server.
+GitHub builds this app into a ready-made Docker image every time `main` changes and publishes it at `ghcr.io/misterrat/discord-ai-multibot-manager`. Portainer just downloads that image and starts it, so nothing is built on your server and no files need to be copied or edited. (This also avoids a Portainer bug where building through a Portainer Agent fails with `http2: frame too large`.)
 
 ### Step 1: Create the stack
 1. Open Portainer and select your environment (usually **local** or **primary**).
@@ -61,7 +61,7 @@ Portainer can pull this repository, build it and start it for you. No files need
 5. **Repository URL**: `https://github.com/MisterRat/Discord-AI-Multibot-Manager`
 6. **Repository reference**: `refs/heads/main`
 7. **Compose path**: `docker-compose.yml`
-8. Click **Deploy the stack**. The first build takes a few minutes.
+8. Click **Deploy the stack**. Portainer downloads the image and starts the container within a minute or so.
 
 ### Step 2: Get the one-time setup token
 1. In Portainer, go to **Containers** and click **discord-ai-multibot-manager**.
@@ -69,7 +69,7 @@ Portainer can pull this repository, build it and start it for you. No files need
 3. Open `http://<your-server-ip>:3010`, click **Setup** under **UI Lock** (bottom left), enter the token and choose your passcode.
 
 ### Updating to a new version
-Open the stack in Portainer and click **Pull and redeploy**. Portainer fetches the latest code and rebuilds the image. *(Optional: under **GitOps updates** you can turn on automatic updates.)*
+Open the stack in Portainer, click **Pull and redeploy**, and make sure **Re-pull image** is switched on. Portainer downloads the newest image that GitHub built from `main`.
 
 ### Where your settings are kept
 Bot tokens, API keys, prompts and your passcode are stored in a Docker volume named `discord-ai-multibot-manager_multibot_data` (Portainer → **Volumes**). It is kept when you redeploy or update. Only deleting that volume erases your settings.
@@ -78,7 +78,8 @@ Bot tokens, API keys, prompts and your passcode are stored in a Docker volume na
 ```bash
 git clone https://github.com/MisterRat/Discord-AI-Multibot-Manager.git
 cd Discord-AI-Multibot-Manager
-docker compose up -d --build
+docker compose up -d                                        # use the published image
+docker compose -f docker-compose.build.yml up -d --build    # or build it yourself
 ```
 
 ---
