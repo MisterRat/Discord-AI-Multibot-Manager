@@ -1,9 +1,9 @@
 # Step 1: Build the React frontend and bundle the backend server
-FROM node:20-alpine AS builder
+FROM node:20-slim AS builder
 
 WORKDIR /app
 
-# Copy package files first for caching
+# Copy package files first for caching (the lockfile pins every package)
 COPY package.json package-lock.json ./
 RUN npm ci
 
@@ -14,12 +14,13 @@ COPY . .
 RUN npm run build
 
 # Step 2: Create the production runtime image
-FROM node:20-alpine AS runner
+FROM node:20-slim AS runner
 
 WORKDIR /app
 
 ENV NODE_ENV=production
-# Settings (including bot tokens and API keys) live here; mount a volume on /app/data to keep them.
+ENV PORT=3000
+# Settings (including bot tokens and API keys) live here; keep /app/data on a volume.
 ENV CONFIG_PATH=/app/data/config.json
 
 # Install production-only dependencies
@@ -34,5 +35,9 @@ RUN mkdir -p /app/data
 VOLUME ["/app/data"]
 
 EXPOSE 3000
+
+# Lets Portainer show the container as Healthy once the dashboard answers.
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/security/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
 CMD ["node", "dist/server.cjs"]

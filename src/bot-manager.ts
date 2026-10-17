@@ -492,6 +492,15 @@ class BotManager {
 
   constructor() {
     this.loadConfig();
+
+    // Recovery for a forgotten passcode, done from Portainer: set
+    // RESET_ADMIN_PASSCODE=true on the stack, redeploy, set a new passcode,
+    // then remove the variable again.
+    if (/^(1|true|yes)$/i.test(process.env.RESET_ADMIN_PASSCODE || '') && this.adminPasscodeHash) {
+      this.adminPasscodeHash = '';
+      this.saveConfigDisk();
+      console.warn('RESET_ADMIN_PASSCODE is set: the admin passcode has been cleared. Remove this variable once you have set a new passcode.');
+    }
   }
 
   public getHasPasscode(): boolean {
