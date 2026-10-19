@@ -31,9 +31,11 @@ RUN npm ci --omit=dev && npm cache clean --force
 
 # Copy built assets and server bundle from the builder stage
 COPY --from=builder /app/dist ./dist
-COPY config.example.json ./
+COPY config.example.json docker-entrypoint.cjs ./
 
-RUN mkdir -p /app/data
+# Data belongs to the unprivileged "node" user. The entrypoint also fixes the
+# owner of volumes created by older versions, then runs the app as "node".
+RUN mkdir -p /app/data && chown node:node /app/data
 VOLUME ["/app/data"]
 
 EXPOSE 3000
@@ -42,4 +44,4 @@ EXPOSE 3000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD node -e "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/security/status').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
 
-CMD ["node", "dist/server.cjs"]
+CMD ["node", "docker-entrypoint.cjs"]

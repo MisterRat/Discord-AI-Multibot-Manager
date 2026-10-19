@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { BotConfig, BotStatus, LogEntry, BotStats, BotInstanceData } from './types';
 import { DEFAULT_CONFIG, applyConfigPatch, toPublicConfig } from './config';
-import { hashPasscode, verifyPasscodeHash, MIN_PASSCODE_LENGTH } from './auth';
+import { hashPasscode, verifyPasscodeHash, MIN_PASSCODE_LENGTH, decidePasscodeReset, normalizeBaseUrl } from './auth';
 import { chunkText, UserCooldown, NO_MENTIONS, REPLY_NO_MENTIONS } from './discord-utils';
 
 // Where settings (including bot tokens and API keys) are stored. Override with
@@ -486,6 +486,8 @@ class BotManager {
   private runners = new Map<string, SingleBotRunner>();
   // scrypt hash of the admin passcode ('' = no passcode set). Never stored in plain text.
   private adminPasscodeHash = '';
+  // Set once RESET_ADMIN_PASSCODE=true has been applied, so it only resets once.
+  private passcodeResetUsed = false;
   private logSubscribers = new Set<(payload: { botId: string; log: LogEntry }) => void>();
   private statusSubscribers = new Set<(payload: { botId: string; status: BotStatus }) => void>();
   private globalSubscribers = new Set<() => void>();
@@ -494,12 +496,23 @@ class BotManager {
     this.loadConfig();
 
     // Recovery for a forgotten passcode, done from Portainer: set
-    // RESET_ADMIN_PASSCODE=true on the stack, redeploy, set a new passcode,
-    // then remove the variable again.
-    if (/^(1|true|yes)$/i.test(process.env.RESET_ADMIN_PASSCODE || '') && this.adminPasscodeHash) {
-      this.adminPasscodeHash = '';
-      this.saveConfigDisk();
-      console.warn('RESET_ADMIN_PASSCODE is set: the admin passcode has been cleared. Remove this variable once you have set a new passcode.');
+    // RESET_ADMIN_PASSCODE=true on the stack and redeploy. It clears the
+    // passcode once; later restarts with the variable still set leave the new
+    // passcode alone. Set it back to false (or remove it) before the next reset.
+    switch (decidePasscodeReset(process.env.RESET_ADMIN_PASSCODE, this.passcodeResetUsed)) {
+      case 'reset':
+        this.adminPasscodeHash = '';
+        this.passcodeResetUsed = true;
+        this.saveConfigDisk();
+        console.warn('RESET_ADMIN_PASSCODE is set: the admin passcode has been cleared. Set a new one in the dashboard, then set RESET_ADMIN_PASSCODE back to false.');
+        break;
+      case 'already-used':
+        console.warn('RESET_ADMIN_PASSCODE is still true but was already used, so the passcode was not cleared again. Set it to false in the stack.');
+        break;
+      case 'clear-marker':
+        this.passcodeResetUsed = false;
+        this.saveConfigDisk();
+        break;
     }
   }
 
@@ -635,6 +648,7 @@ class BotManager {
     try {
       const exportData = {
         adminPasscodeHash: this.adminPasscodeHash,
+        ...(this.passcodeResetUsed ? { passcodeResetUsed: true } : {}),
         bots: this.getBots().map((runner) => ({
           id: runner.id,
           name: runner.name,
@@ -669,6 +683,7 @@ class BotManager {
 
         let migratePasscode = false;
         if (parsed && typeof parsed === 'object') {
+          this.passcodeResetUsed = parsed.passcodeResetUsed === true;
           if (typeof parsed.adminPasscodeHash === 'string') {
             this.adminPasscodeHash = parsed.adminPasscodeHash;
           } else if (typeof parsed.adminPasscode === 'string' && parsed.adminPasscode) {
@@ -741,13 +756,21 @@ class BotManager {
 
   /**
    * The dashboard never receives stored API keys, so when it asks to test a
-   * connection or list models without typing a key, fall back to the key saved
-   * for that bot.
+   * connection or list models without typing a key, it may use the key saved
+   * for that bot, but only against the endpoint saved with it. A saved key is
+   * never sent to a different URL; for that the key has to be typed in.
    */
-  public resolveApiKey(providedKey: unknown, botId: unknown): string {
-    if (typeof providedKey === 'string' && providedKey.trim()) return providedKey.trim();
-    if (typeof botId === 'string') return this.runners.get(botId)?.config.openaiApiKey || '';
-    return '';
+  public resolveApiKey(
+    providedKey: unknown,
+    botId: unknown,
+    url: unknown
+  ): { key: string; refused: boolean } {
+    if (typeof providedKey === 'string' && providedKey.trim()) return { key: providedKey.trim(), refused: false };
+    const runner = typeof botId === 'string' ? this.runners.get(botId) : undefined;
+    const savedKey = runner?.config.openaiApiKey || '';
+    if (!savedKey) return { key: '', refused: false };
+    const sameEndpoint = normalizeBaseUrl(url) !== '' && normalizeBaseUrl(url) === normalizeBaseUrl(runner!.config.openaiBaseUrl);
+    return sameEndpoint ? { key: savedKey, refused: false } : { key: '', refused: true };
   }
 
   // Generic helpers

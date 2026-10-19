@@ -82,6 +82,39 @@ test('without a passcode, bot data is readable but secrets are stripped', async 
   assert.ok(setupToken().length >= 12, 'setup token printed to log');
 });
 
+test('without a passcode the dashboard is read-only: no saves, starts, model lists or tests', async () => {
+  for (const [method, url, body] of [
+    ['PUT', '/api/bots/default', { name: 'x', config: { openaiBaseUrl: 'https://evil.example/v1' } }],
+    ['POST', '/api/bots', { name: 'new', config: { discordToken: 'NEW.TOKEN' } }],
+    ['POST', '/api/bots/default/start', {}],
+    ['DELETE', '/api/bots/default', undefined],
+    ['POST', '/api/models', { url: 'https://evil.example/v1', botId: 'default' }],
+    ['POST', '/api/test-openai', { url: 'https://evil.example/v1', botId: 'default', model: 'm' }],
+  ] as const) {
+    const r = await call(local, method, url, body);
+    assert.equal(r.status, 403, `${method} ${url}`);
+    assert.equal(r.json.code, 'passcode-required');
+    assertNoSecrets(r.text);
+  }
+  const stored = JSON.parse(fs.readFileSync(configPath, 'utf-8')).bots;
+  assert.equal(stored.length, 1, 'no bot was created');
+  assert.ok(!JSON.stringify(stored).includes('evil.example'), 'endpoint unchanged');
+  assert.ok(!JSON.stringify(stored).includes('NEW.TOKEN'), 'no token saved');
+});
+
+test('a loopback request relayed by a reverse proxy does not count as local', async () => {
+  const proxied = await fetch(local + '/api/security/status', { headers: { 'X-Forwarded-For': '203.0.113.9' } });
+  assert.equal((await proxied.json()).setupTokenRequired, true);
+  const direct = await call(local, 'GET', '/api/security/status');
+  assert.equal(direct.json.setupTokenRequired, false);
+  const res = await fetch(local + '/api/security/setup', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'X-Forwarded-For': '203.0.113.9' },
+    body: JSON.stringify({ passcode: 'proxied-claim' }),
+  });
+  assert.equal(res.status, 403, 'needs the setup token');
+});
+
 test('a remote browser cannot set the first passcode without the setup token', async (t) => {
   if (!remote) return t.skip('no LAN address available');
   const status = await call(remote, 'GET', '/api/security/status');
@@ -157,6 +190,23 @@ test('saving with blank secrets keeps them; typing replaces; null clears the key
   assert.equal(stored().openaiApiKey, '');
   await save({ openaiApiKey: FAKE_KEY });
   assert.equal(stored().openaiApiKey, FAKE_KEY);
+});
+
+test("a saved key is only sent to that bot's saved endpoint", async () => {
+  const other = await call(local, 'POST', '/api/models', { url: 'https://evil.example/v1', botId: 'default' }, session);
+  assert.equal(other.status, 200);
+  assert.equal(other.json.success, false);
+  assert.match(other.json.message, /only sent to its saved endpoint/);
+  const test = await call(local, 'POST', '/api/test-openai', { url: 'https://evil.example/v1', botId: 'default', model: 'm' }, session);
+  assert.equal(test.json.success, false);
+  assert.match(test.json.message, /only sent to its saved endpoint/);
+
+  const { botManager } = await import('../src/bot-manager');
+  assert.deepEqual(botManager.resolveApiKey('', 'default', 'https://API.openai.com/v1/'), { key: FAKE_KEY, refused: false });
+  assert.deepEqual(botManager.resolveApiKey('', 'default', 'https://evil.example/v1'), { key: '', refused: true });
+  assert.deepEqual(botManager.resolveApiKey('', 'default', ''), { key: '', refused: true });
+  assert.deepEqual(botManager.resolveApiKey(' typed ', 'default', 'https://evil.example/v1'), { key: 'typed', refused: false });
+  assert.deepEqual(botManager.resolveApiKey('', 'no-such-bot', 'https://evil.example/v1'), { key: '', refused: false });
 });
 
 test('cross-origin writes are rejected', async () => {

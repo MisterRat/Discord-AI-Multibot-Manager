@@ -9,6 +9,9 @@ import {
   setupTokensMatch,
   parseCookies,
   isLoopbackAddress,
+  isLocalRequest,
+  decidePasscodeReset,
+  normalizeBaseUrl,
 } from '../src/auth';
 import { DEFAULT_CONFIG, applyConfigPatch, toPublicConfig } from '../src/config';
 import { chunkText, UserCooldown } from '../src/discord-utils';
@@ -39,10 +42,14 @@ test('attempt limiter blocks after 5 failures per address and releases after the
   assert.equal(lim.retryAfter('a'), 0);
 });
 
-test('attempt limiter has a global ceiling across addresses', () => {
+test('global ceiling slows guessers but never locks out a clean address or a signed-in browser', () => {
   const lim = new AttemptLimiter(5, 10, 60_000, () => 0);
   for (let i = 0; i < 10; i++) lim.recordFailure('ip' + i);
-  assert.ok(lim.retryAfter('fresh') > 0);
+  assert.ok(lim.retryAfter('ip3') > 0, 'an address that has failed waits while the ceiling is hit');
+  assert.equal(lim.retryAfter('owner'), 0, 'an address with no failures is not blocked');
+  assert.equal(lim.retryAfter('ip3', true), 0, 'a signed-in browser skips the global ceiling');
+  for (let i = 0; i < 5; i++) lim.recordFailure('bad');
+  assert.ok(lim.retryAfter('bad', true) > 0, 'the per-address limit still applies to a signed-in browser');
 });
 
 test('sessions expire and can be revoked', () => {
@@ -76,6 +83,36 @@ test('cookie parsing and loopback detection', () => {
   assert.deepEqual(parseCookies(undefined), {});
   assert.ok(isLoopbackAddress('127.0.0.1') && isLoopbackAddress('::1') && isLoopbackAddress('::ffff:127.0.0.1'));
   assert.ok(!isLoopbackAddress('172.17.0.1') && !isLoopbackAddress(undefined));
+});
+
+test('a loopback connection with proxy headers is not local', () => {
+  assert.ok(isLocalRequest('127.0.0.1', {}));
+  assert.ok(isLocalRequest('::1', { host: 'localhost' }));
+  assert.ok(!isLocalRequest('127.0.0.1', { 'x-forwarded-for': '203.0.113.9' }));
+  assert.ok(!isLocalRequest('::ffff:127.0.0.1', { forwarded: 'for=203.0.113.9' }));
+  assert.ok(!isLocalRequest('127.0.0.1', { 'x-real-ip': '203.0.113.9' }));
+  assert.ok(!isLocalRequest('172.17.0.1', {}));
+});
+
+test('RESET_ADMIN_PASSCODE resets once per true setting', () => {
+  assert.equal(decidePasscodeReset('true', false), 'reset');
+  assert.equal(decidePasscodeReset('TRUE', false), 'reset');
+  assert.equal(decidePasscodeReset('1', false), 'reset');
+  assert.equal(decidePasscodeReset('true', true), 'already-used', 'restart with the flag still set keeps the new passcode');
+  assert.equal(decidePasscodeReset('false', true), 'clear-marker', 'setting it back to false re-arms it');
+  assert.equal(decidePasscodeReset(undefined, true), 'clear-marker');
+  assert.equal(decidePasscodeReset('false', false), 'none');
+  assert.equal(decidePasscodeReset(undefined, false), 'none');
+});
+
+test('endpoint comparison ignores trailing slashes and host case, not path case', () => {
+  assert.equal(normalizeBaseUrl('https://API.OpenAI.com/v1/'), 'https://api.openai.com/v1');
+  assert.equal(normalizeBaseUrl(' https://api.openai.com/v1 '), 'https://api.openai.com/v1');
+  assert.notEqual(normalizeBaseUrl('https://host/V1'), normalizeBaseUrl('https://host/v1'));
+  assert.notEqual(normalizeBaseUrl('https://api.openai.com/v1'), normalizeBaseUrl('https://api.openai.com.evil.example/v1'));
+  assert.notEqual(normalizeBaseUrl('http://api.openai.com/v1'), normalizeBaseUrl('https://api.openai.com/v1'));
+  assert.equal(normalizeBaseUrl(''), '');
+  assert.equal(normalizeBaseUrl(undefined), '');
 });
 
 // --- config -----------------------------------------------------------------

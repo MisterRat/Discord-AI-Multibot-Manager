@@ -39,6 +39,38 @@ jobs:
       - uses: actions/checkout@v4
       - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
+      - name: Build a test image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64
+          load: true
+          tags: dbm:smoke
+          cache-from: type=gha
+      - name: Smoke test the container
+        run: |
+          set -eu
+          # A data volume left by an older version, with root-owned files.
+          docker volume create oldvol
+          docker run --rm -v oldvol:/app/data --entrypoint sh dbm:smoke \
+            -c 'echo "{\"bots\":[]}" > /app/data/config.json && chown 0:0 /app/data /app/data/config.json'
+          docker run -d --name smoke -p 3000:3000 -v oldvol:/app/data dbm:smoke
+          for i in $(seq 1 30); do curl -sf http://127.0.0.1:3000/api/security/status && break; sleep 1; done
+          echo
+          # The app process must not run as root.
+          uid=$(docker top smoke -eo uid,args | awk '/docker-entrypoint/ {print $1; exit}')
+          echo "app uid: $uid"; test "$uid" != "0"
+          # It must be able to save settings into the old volume.
+          token=$(docker logs smoke 2>&1 | sed -n 's/.*setup token: //p' | tail -1)
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST http://127.0.0.1:3000/api/security/setup \
+            -H 'content-type: application/json' -d "{\"passcode\":\"smoke-test\",\"setupToken\":\"$token\"}")
+          echo "setup: $code"; test "$code" = "200"
+          docker exec smoke grep -q '"adminPasscodeHash": "scrypt' /app/data/config.json
+          # Locked now: anonymous requests are refused.
+          test "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:3000/api/bots)" = "401"
+      - name: Show container log on failure
+        if: failure()
+        run: docker logs smoke || true
       - name: Log in to GitHub Container Registry
         if: github.event_name != 'pull_request'
         uses: docker/login-action@v3

@@ -27,8 +27,9 @@ export const MIN_PASSCODE_LENGTH = 6;
 
 // ---------------------------------------------------------------------------
 // Failed-attempt limiter: per client address, plus a global ceiling so a
-// spread-out guessing attempt (or everything arriving via one proxy address)
-// is still slowed down.
+// spread-out guessing attempt is still slowed down. While the global ceiling
+// is reached, only addresses that have themselves failed recently are held
+// back, so strangers guessing from elsewhere can't lock the owner out.
 // ---------------------------------------------------------------------------
 
 export class AttemptLimiter {
@@ -47,8 +48,12 @@ export class AttemptLimiter {
     return list.filter((t) => t > cutoff);
   }
 
-  /** Seconds until another attempt is allowed, or 0 if allowed now. */
-  retryAfter(key: string): number {
+  /**
+   * Seconds until another attempt is allowed, or 0 if allowed now.
+   * `ignoreGlobal` skips the global ceiling (for a browser that already holds
+   * a valid session).
+   */
+  retryAfter(key: string, ignoreGlobal = false): number {
     const mine = this.prune(this.failures.get(key) || []);
     this.global = this.prune(this.global);
     if (mine.length) this.failures.set(key, mine);
@@ -56,7 +61,9 @@ export class AttemptLimiter {
 
     let waitUntil = 0;
     if (mine.length >= this.perKeyLimit) waitUntil = Math.max(waitUntil, mine[0] + this.windowMs);
-    if (this.global.length >= this.globalLimit) waitUntil = Math.max(waitUntil, this.global[0] + this.windowMs);
+    if (!ignoreGlobal && mine.length > 0 && this.global.length >= this.globalLimit) {
+      waitUntil = Math.max(waitUntil, this.global[0] + this.windowMs);
+    }
     return waitUntil ? Math.max(1, Math.ceil((waitUntil - this.now()) / 1000)) : 0;
   }
 
@@ -165,4 +172,50 @@ export function parseCookies(header: string | undefined): Record<string, string>
 export function isLoopbackAddress(address: string | undefined): boolean {
   if (!address) return false;
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1';
+}
+
+const PROXY_HEADERS = ['x-forwarded-for', 'forwarded', 'x-real-ip', 'x-forwarded-host', 'cf-connecting-ip'];
+
+/**
+ * True when a request comes from a browser on the server itself. A loopback
+ * connection that carries proxy headers was relayed by a reverse proxy on the
+ * same machine for someone else, so it does not count.
+ */
+export function isLocalRequest(address: string | undefined, headers: Record<string, unknown>): boolean {
+  if (!isLoopbackAddress(address)) return false;
+  return !PROXY_HEADERS.some((h) => headers[h] !== undefined);
+}
+
+// ---------------------------------------------------------------------------
+// RESET_ADMIN_PASSCODE handling. The reset happens once per "true" setting:
+// after it runs, a marker is saved so later restarts with the variable still
+// set don't wipe the new passcode. Setting the variable back to false clears
+// the marker, so the next "true" resets again.
+// ---------------------------------------------------------------------------
+
+export type PasscodeResetAction = 'reset' | 'already-used' | 'clear-marker' | 'none';
+
+export function decidePasscodeReset(flagValue: string | undefined, markerSet: boolean): PasscodeResetAction {
+  const flagOn = /^(1|true|yes)$/i.test((flagValue || '').trim());
+  if (flagOn) return markerSet ? 'already-used' : 'reset';
+  return markerSet ? 'clear-marker' : 'none';
+}
+
+// ---------------------------------------------------------------------------
+// Endpoint matching for saved API keys
+// ---------------------------------------------------------------------------
+
+/** Normalise an API base URL for comparison: trimmed, no trailing slashes, lower-case scheme/host. */
+export function normalizeBaseUrl(url: unknown): string {
+  if (typeof url !== 'string') return '';
+  const trimmed = url.trim();
+  if (!trimmed) return '';
+  try {
+    const u = new URL(trimmed);
+    const pathPart = u.pathname.replace(/\/+$/, '');
+    // URL already lower-cases the scheme and host; the path stays case-sensitive.
+    return `${u.protocol}//${u.host}${pathPart}${u.search}`;
+  } catch {
+    return trimmed.replace(/\/+$/, '');
+  }
 }

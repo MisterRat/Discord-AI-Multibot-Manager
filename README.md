@@ -110,13 +110,14 @@ docker compose -f docker-compose.build.yml up -d --build    # or build it yourse
    - Use the **Dashboard** and **Terminal Logs** tabs to view live logs, track connection latency, and check active guild/member count.
    - Keep track of total chats, system SLA metrics, and Docker container CPU/RAM allocations directly from the sidebar.
 7. **Secure Your Instance (UI Security Lock)**:
-   - Located at the bottom of the left sidebar is the **UI Lock** status card. Until a passcode is set, anyone who can open the dashboard can control your bots, so set one right away.
+   - Located at the bottom of the left sidebar is the **UI Lock** status card. Until a passcode is set the dashboard is **read-only**: you can look around, but bots can't be added, changed, started or tested. Setting a passcode is the first step.
    - Click **Setup** and choose a passcode of at least 6 characters. Unless your browser is on the server itself, you will also be asked for the **one-time setup token**. It is printed in the server log at startup while no passcode is set; in Portainer or Synology Container Manager, open the container's **Logs**. This stops someone else on your network from claiming the dashboard first.
    - Once a passcode is set, the dashboard, live logs and every bot control require it. A browser stays signed in for 12 hours (or until you click **Lock**, change the passcode, or restart the container).
    - Saved Discord tokens and API keys are never sent to the browser, locked or not. The fields show that a value is saved; type a new one to replace it. Leaving a field blank keeps the saved value.
    - Repeated wrong passcodes are slowed down (5 tries per 15 minutes per address).
    - **Accidental Lockout Protection**: clicking **Lock** asks you to type your passcode first, so a typo during setup can't lock you out.
-   - **Forgot the passcode?** In Portainer, open the stack, add an environment variable `RESET_ADMIN_PASSCODE` = `true`, and click **Update the stack** (or **Pull and redeploy**). The passcode is cleared and a new setup token appears in the container log. Set a new passcode, then remove the variable and update the stack again.
+   - **Forgot the passcode?** In Portainer, open the stack, add an environment variable `RESET_ADMIN_PASSCODE` = `true`, and click **Update the stack** (or **Pull and redeploy**). The passcode is cleared once and a new setup token appears in the container log; your bots keep running. Set a new passcode. The reset only happens once, so restarts with the variable still set won't clear your new passcode. Set it back to `false` (or remove it) afterwards so it is ready for next time.
+   - **Saved API keys stay with their endpoint.** *Test Connection* and the model list use a bot's saved key only for the endpoint saved with it. If you change the endpoint, either type the key again or save first.
 
 8. **Abuse protection in Discord**:
    - Bot replies can never ping `@everyone`, `@here`, roles or other users, whatever the AI writes.
@@ -124,7 +125,15 @@ docker compose -f docker-compose.build.yml up -d --build    # or build it yourse
 
 ---
 
+## 🔄 Upgrading to 1.3.0
+- Nothing to do: click **Pull and redeploy** in Portainer. Your settings carry over.
+- The app inside the container now runs as an ordinary user instead of root. On first start it takes ownership of the files in your settings volume, so older installs keep working.
+- If your stack still has `RESET_ADMIN_PASSCODE=true`, the next start clears the passcode once. Set it to `false` before updating if you don't want that.
+
 ## 🔄 Upgrading from 1.1.x
 - Your existing passcode keeps working. It is converted to a secure hash in `config.json` the first time the new version starts.
 - When a passcode is set, the dashboard no longer shows anything until you unlock it.
 - **If your dashboard was ever reachable by other people on your network or the internet, reset your Discord bot tokens and AI API keys.** Earlier versions sent them to any browser that asked, even while locked.
+
+## 📄 License
+The code is released under the [MIT License](LICENSE).

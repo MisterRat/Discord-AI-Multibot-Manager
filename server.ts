@@ -11,7 +11,7 @@ import {
   generateSetupToken,
   setupTokensMatch,
   parseCookies,
-  isLoopbackAddress,
+  isLocalRequest,
 } from './src/auth';
 
 export function createApp() {
@@ -72,7 +72,9 @@ export function createApp() {
   };
 
   const rateLimited = (req: Request, res: Response): boolean => {
-    const wait = limiter.retryAfter(clientKey(req));
+    // A browser that is already signed in is never held back by strangers' failures.
+    const hasSession = botManager.getHasPasscode() && sessions.isValid(sessionToken(req));
+    const wait = limiter.retryAfter(clientKey(req), hasSession);
     if (wait > 0) {
       res.setHeader('Retry-After', String(wait));
       res.status(429).json({ error: `Too many failed attempts. Try again in ${Math.ceil(wait / 60)} minute(s).` });
@@ -106,7 +108,7 @@ export function createApp() {
       hasPasscode: botManager.getHasPasscode(),
       authenticated: isAuthorized(req),
       // When false, this browser is on the server itself and needs no setup token.
-      setupTokenRequired: !botManager.getHasPasscode() && !isLoopbackAddress(req.socket.remoteAddress),
+      setupTokenRequired: !botManager.getHasPasscode() && !isLocalRequest(req.socket.remoteAddress, req.headers),
       minPasscodeLength: MIN_PASSCODE_LENGTH,
     });
   });
@@ -141,7 +143,7 @@ export function createApp() {
 
     if (!hadPasscode) {
       // First-time setup: only from the server itself, or with the token from the log.
-      const local = isLoopbackAddress(req.socket.remoteAddress);
+      const local = isLocalRequest(req.socket.remoteAddress, req.headers);
       if (!local && !setupTokensMatch(req.body?.setupToken, setupToken)) {
         limiter.recordFailure(clientKey(req));
         return res.status(403).json({
@@ -180,6 +182,17 @@ export function createApp() {
   // ---------------------------------------------------------------------------
 
   app.use('/api', requireAuth);
+
+  // Until a passcode is set the dashboard is read-only: nothing can be changed,
+  // started or tested, so nobody who stumbles on an unlocked dashboard can add
+  // tokens, point a bot at their own server or use a saved key.
+  app.use('/api', (req, res, next) => {
+    if (req.method === 'GET' || req.method === 'HEAD' || botManager.getHasPasscode()) return next();
+    res.status(403).json({
+      code: 'passcode-required',
+      error: 'Set an admin passcode first. Until then the dashboard is read-only.',
+    });
+  });
 
   app.get('/api/bots', (req, res) => {
     res.json(botManager.getBotsData());
@@ -255,15 +268,22 @@ export function createApp() {
     res.json({ success: true });
   });
 
+  const SAVED_KEY_OTHER_URL =
+    "This bot's saved API key is only sent to its saved endpoint. Type the key to use a different endpoint, or save the new endpoint first.";
+
   app.post('/api/test-openai', async (req, res) => {
     const { url, apiKey, model, botId } = req.body || {};
-    const result = await botManager.testOpenAIConnection(url, botManager.resolveApiKey(apiKey, botId), model);
+    const resolved = botManager.resolveApiKey(apiKey, botId, url);
+    if (resolved.refused) return res.json({ success: false, message: `Connection test failed: ${SAVED_KEY_OTHER_URL}` });
+    const result = await botManager.testOpenAIConnection(url, resolved.key, model);
     res.json(result);
   });
 
   app.post('/api/models', async (req, res) => {
     const { url, apiKey, botId } = req.body || {};
-    const result = await botManager.fetchAvailableModels(url, botManager.resolveApiKey(apiKey, botId));
+    const resolved = botManager.resolveApiKey(apiKey, botId, url);
+    if (resolved.refused) return res.json({ success: false, models: [], message: SAVED_KEY_OTHER_URL });
+    const result = await botManager.fetchAvailableModels(url, resolved.key);
     res.json(result);
   });
 

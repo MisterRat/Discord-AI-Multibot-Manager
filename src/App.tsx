@@ -160,10 +160,23 @@ export default function App() {
   }, []);
 
   // Wrapper for protected API calls: a 401 means the session ended, so re-check and show the lock.
+  // A 403 "passcode-required" means no passcode is set yet, so open the setup dialog and say why.
   const apiFetch = async (url: string, init: RequestInit = {}) => {
     const res = await fetch(url, { credentials: 'same-origin', ...init });
     if (res.status === 401) {
       refreshSecurityStatus();
+    } else if (res.status === 403) {
+      res
+        .clone()
+        .json()
+        .then((data) => {
+          if (data?.code === 'passcode-required') {
+            setSetupSuccess('');
+            setSetupError(data.error || 'Set an admin passcode first.');
+            setShowSecuritySetupModal(true);
+          }
+        })
+        .catch(() => {});
     }
     return res;
   };
@@ -424,10 +437,10 @@ export default function App() {
 
   // Fetch available models on tab open
   useEffect(() => {
-    if (activeTab === 'ai_settings' && config.openaiBaseUrl && hasUsableApiKey && modelsList.length === 0) {
+    if (activeTab === 'ai_settings' && hasPasscode && config.openaiBaseUrl && hasUsableApiKey && modelsList.length === 0) {
       handleFetchModels();
     }
-  }, [activeTab, selectedBotId, config.openaiBaseUrl, hasUsableApiKey, modelsList.length]);
+  }, [activeTab, selectedBotId, hasPasscode, config.openaiBaseUrl, hasUsableApiKey, modelsList.length]);
 
   const handleConfigChange = <K extends keyof BotConfig>(key: K, value: BotConfig[K]) => {
     setConfig((prev) => ({ ...prev, [key]: value }));
